@@ -129,3 +129,65 @@ This script will output the extracted binary message and calculate metrics like 
 
 Additional arguments can be passed to simulate various audio attacks (e.g., --add_noise, --compress_mp3).
 
+
+Results & Demos
+(This section should be filled in as you achieve milestones. You can use images, audio links, and tables.)
+
+Initial Prototype (Month [X]): [Description of what was achieved, e.g., "Basic GAN generating static, 10-bit message embedding working."]
+
+Perceptual Stealth Demo:
+
+[Link to pure generated noise sample.wav]
+
+[Link to stego-noise sample.wav (same message, different generation)]
+
+Can you hear the difference?
+
+Robustness against MP3 Compression:
+
+BER: [X]% for [Y] bits at [Z] kbps MP3 compression.
+
+[Link to compressed stego-audio.mp3 (after re-encoding to wav for extraction)]
+
+Capacity Achieved: Successfully embedded [X] bits per second of audio with a BER of [Y]%.
+
+Future Work
+[ ] Explore more advanced GAN architectures (e.g., StyleGAN, VQ-GAN) for improved noise quality and control.
+
+[ ] Implement a perceptual loss function to better guide the Generator towards human-imperceptible embeddings.
+
+[ ] Develop a more sophisticated steganalysis module to actively test the imperceptibility of the generated noise.
+
+[ ] Experiment with different types of cover audio beyond white noise (e.g., ambient soundscapes).
+
+[ ] Optimize for real-time embedding and extraction.
+
+Contributing
+Contributions are welcome! If you'd like to contribute, please follow these steps:
+
+Fork the repository.
+
+Create a new feature branch (git checkout -b feature/your-feature-name).
+
+Commit your changes (git commit -m 'feat: Add new feature X').
+
+Push to the branch (git push origin feature/your-feature-name).
+
+Open a Pull Request.
+
+Please ensure your code adheres to PEP 8 guidelines and includes appropriate documentation (docstrings, comments).
+
+License
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+Authors
+[Your Name] - [Your GitHub Profile Link] - [Your University/Affiliation]
+
+[Partner's Name] - [Partner's GitHub Profile Link] - [Partner's University/Affiliation]
+
+Acknowledgments
+Inspired by research in generative models and differentiable signal processing, particularly works like "Hide and Speak: Towards Deep Neural Audio Steganography" ([Link to relevant paper if public])
+
+Built with PyTorch and torchaudio.
+
+[Any other libraries or resources that were particularly helpful]
