@@ -1,12 +1,6 @@
 
 🎧 EchoCrypt – Coverless Audio Steganography Using GANs
 
-yaml
-Copy
-Edit
-
----
-
 ## 🚀 Project Overview
 
 EchoCrypt is a research-grade audio steganography system that uses **GAN-generated white noise** to hide binary data without modifying existing files — making it stealthy and virtually undetectable. It is a **coverless** method, meaning it generates audio that already contains the embedded data, unlike traditional stego methods that modify original media.
@@ -80,8 +74,7 @@ python scripts/generate_noise.py
 # Extract hidden data from audio
 python scripts/extract_data.py
 👩‍💻 Contributors
-Andrew Varghese Koshy – Project Lead, GAN Engineering
-
+Andrew Varghese Koshy – GAN Engineering
 Jenit Mathew – Data Processing, Testing, and Research
 
 📚 Research Motivation
