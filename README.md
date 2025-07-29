@@ -17,9 +17,12 @@ EchoCrypt/
 │   └── binary/             # Binary files to be embedded
 │
 ├── models/
-│   ├── generator.py        # GAN noise generator
-│   ├── train.py            # Training logic
-│   └── saved_models/       # Saved weights and checkpoints
+│   ├── generator.py         # Generator model
+│   ├── discriminator.py     # 🧠 Discriminator model (for training the GAN)
+│   ├── extractor.py         # 🔍 Decoder/extractor model (optional, if you're using a CNN)
+│   ├── train.py             # GAN training script (uses generator + discriminator)
+│   └── saved_models/        # Stores trained models
+│
 │
 ├── utils/
 │   └── audio_tools.py      # Audio pre/post-processing functions (STFT, etc.)
