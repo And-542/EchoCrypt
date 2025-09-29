@@ -4,6 +4,7 @@ numpy
 scipy
 matplotlib
 soundfile
+librosa
 torch>=2.0.0 # Use a version compatible with your CUDA/GPU
 torchaudio>=2.0.0
-# Add any other tools you need, like pandas or tqdm
+tqdm # For progress bar
