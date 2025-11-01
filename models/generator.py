@@ -48,12 +48,8 @@ class Generator(nn.Module):
             nn.ReLU(True),
             # State: (N, 64, 160)
 
-            nn.ConvTranspose1d(64, 1, 10, 10, 0, bias=False), # stride=10, padding=0 -> 1x1600
-            # State: (N, 1, 1600)
-            
-            # Final upsample to target length
-            nn.Upsample(size=(output_length,)),
-            nn.Conv1d(1, 1, kernel_size=11, stride=1, padding=5), # Smoothing filter
+            # A single large kernel to generate the full waveform
+            nn.ConvTranspose1d(64, 1, 100, 100, 0, bias=False), # -> (N, 1, 16000)
             nn.Tanh()  # Normalize output to [-1, 1]
         )
 
