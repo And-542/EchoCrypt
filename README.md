@@ -28,9 +28,9 @@ EchoCrypt/
 │   └── audio_tools.py      # Audio pre/post-processing functions (STFT, etc.)
 │
 ├── scripts/
-│   ├── generate_noise.py   # Script to generate stego noise
-│   ├── embed_data.py       # Script to embed binary into audio
-│   └── extract_data.py     # Script to extract data from audio
+│   ├── generate_noise.py   # Script to generate random noise for testing
+│   ├── embed_data.py       # Script to embed a secret message into a new audio file
+│   └── extract_data.py     # Script to verify if a message is in an audio file
 │
 ├── research/
 │   ├── stego_paper.pdf     # Reference research papers
@@ -45,7 +45,7 @@ Coverless Audio Steganography
 
 GAN (Generative Adversarial Networks) for generating white noise that encodes binary data
 
-Differentiable STFT/iSTFT using Librosa
+Differentiable STFT using PyTorch
 
 Optional CNN-based decoder for data extraction
 
@@ -68,14 +68,17 @@ conda activate echocrypt
 # Install dependencies
 pip install -r requirements.txt
 🧪 Usage Example
-bash
-Copy
-Edit
-# Generate white noise with embedded binary data
-python scripts/generate_noise.py
+The current implementation uses a **verification** method. You embed a message and then verify if a given audio file matches that specific message.
 
-# Extract hidden data from audio
-python scripts/extract_data.py
+1. **Embed a secret message into an audio file:**
+```bash
+python scripts/embed_data.py "your secret message here" -o "path/to/your/output.wav"
+```
+
+2. **Verify if the audio file contains your secret message:**
+```bash
+python scripts/extract_data.py "path/to/your/output.wav" "your secret message here"
+```
 👩‍💻 Contributors
 Andrew Varghese Koshy – GAN Engineering
 Jenit Mathew – Data Processing, Testing, and Research

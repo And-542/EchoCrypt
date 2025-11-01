@@ -1,72 +1,87 @@
+import sys
 import os
+import torch
+import soundfile as sf
+import argparse
+import hashlib
 
-def text_to_binary(text, space_separated=True):
+# Add the project root to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from models.generator import Generator
+
+def message_to_latent_vector(message: str, latent_dim: int) -> torch.Tensor:
     """
-    Converts a given text string into its binary representation.
+    Converts a string message into a deterministic latent vector.
+
+    This function uses a cryptographic hash (SHA-256) of the message to seed a
+    PyTorch random number generator. This ensures that the same message always
+    produces the same latent vector, and that the vector's components are
+    distributed similarly to the random noise the generator was trained on.
 
     Args:
-        text (str): The input text string.
-        space_separated (bool): If True, separates each byte with a space.
+        message (str): The secret message to embed.
+        latent_dim (int): The dimensionality of the latent vector.
 
     Returns:
-        str: The binary representation of the text.
+        torch.Tensor: A tensor of shape (1, latent_dim) to be used as input for the generator.
     """
-    if space_separated:
-        return ' '.join(format(ord(char), '08b') for char in text)
-    else:
-        return ''.join(format(ord(char), '08b') for char in text)
+    # 1. Create a hash of the message to get a fixed-size, deterministic seed
+    hasher = hashlib.sha256(message.encode('utf-8'))
+    seed_bytes = hasher.digest()
 
-def save_binary_to_file(text, folder_path, filename="binary_output.txt", space_separated=True):
-    """
-    Converts text to binary and saves it to a file in the specified folder.
+    # 2. Convert the first 8 bytes of the hash to a 64-bit integer seed
+    seed = int.from_bytes(seed_bytes[:8], 'big')
 
-    Args:
-        text (str): The input text string.
-        folder_path (str): Folder to save output. Will be created if missing.
-        filename (str): Output file name.
-        space_separated (bool): If True, space between each byte in binary.
+    # 3. Seed the PyTorch random number generator
+    generator = torch.Generator()
+    generator.manual_seed(seed)
 
-    Returns:
-        str: The binary string saved to the file.
-    """
-    binary_data = text_to_binary(text, space_separated)
+    # 4. Generate the latent vector using the seeded generator
+    # This creates a tensor with values from a standard normal distribution
+    latent_vector = torch.randn(1, latent_dim, generator=generator)
 
-    try:
-        os.makedirs(folder_path, exist_ok=True)
-        print(f"📁 Directory ensured: {folder_path}")
-    except OSError as e:
-        print(f"❌ Error creating directory {folder_path}: {e}")
-        return None
+    print(f"🌱 Message converted to latent vector with seed: {seed}")
+    return latent_vector
 
-    file_path = os.path.join(folder_path, filename)
+def main():
+    parser = argparse.ArgumentParser(description="Embed a secret message into GAN-generated audio.")
+    parser.add_argument("message", type=str, help="The secret message to embed.")
 
-    try:
-        with open(file_path, 'w') as f:
-            f.write(binary_data)
-        print(f"✅ Binary saved to: {file_path}")
-        return binary_data
-    except IOError as e:
-        print(f"❌ Error writing to file {file_path}: {e}")
-        return None
+    # Default output path relative to the project root
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    default_output = os.path.join(project_root, 'data', 'noise', 'embedded_message.wav')
+    parser.add_argument("-o", "--output", type=str, default=default_output, help="Path to save the output .wav file.")
+    args = parser.parse_args()
 
-# ------------------ Run this in VS Code / PyCharm ------------------
+    # --- Configuration ---
+    LATENT_DIM = 100
+    MODEL_PATH = r"d:\EchoCrypt\EchoCrypt\models\saved_models\generator_final.pth"
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    SAMPLE_RATE = 16000 # Must match training
+    AUDIO_LENGTH_SAMPLES = SAMPLE_RATE * 1 # Must match training
+
+    # --- Load Model ---
+    print(f"💿 Loading trained generator model from {MODEL_PATH}")
+    model = Generator(latent_dim=LATENT_DIM, output_length=AUDIO_LENGTH_SAMPLES)
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE, weights_only=True))
+    model.to(DEVICE)
+    model.eval()
+
+    # --- Generate Latent Vector from Message ---
+    latent_vector = message_to_latent_vector(args.message, LATENT_DIM).to(DEVICE)
+
+    # --- Generate Audio ---
+    print("🎶 Generating audio from message...")
+    with torch.no_grad():
+        generated_waveform = model(latent_vector)
+
+    # --- Save Audio ---
+    audio_data = generated_waveform.squeeze().cpu().numpy()
+    output_path = args.output
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    sf.write(output_path, audio_data, samplerate=SAMPLE_RATE)
+    print(f"✅ Audio with embedded message saved to {output_path}")
 
 if __name__ == "__main__":
-    # 🔐 Message to embed
-    input_text = "Hello Andrew"
-
-    # 📁 Output directory and file
-    output_folder = r"D:\EchoCrypt\EchoCrypt\data\binary"
-    output_filename = "echocrypt_message.txt"
-
-    # 📝 Convert and save
-    binary = save_binary_to_file(
-        text=input_text,
-        folder_path=output_folder,
-        filename=output_filename,
-        space_separated=True  # Set to False if you want no spaces
-    )
-
-    # 🔍 Show binary
-    if binary:
-        print(f"\n📤 Binary content:\n{binary}")
+    main()
