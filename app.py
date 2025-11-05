@@ -145,7 +145,7 @@ def extract_message(audio_filepath):
 with gr.Blocks(theme=gr.themes.Soft()) as demo:
     gr.Markdown(
         """
-        # 🎧 EchoCrypt: Audio Steganography UI
+        # 🎧 EchoCrypt: Audio Steganography 
         Use the tools below to hide a message in a generated audio file or extract a message from an existing one.
         """
     )
