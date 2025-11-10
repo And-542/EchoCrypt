@@ -2,8 +2,8 @@
 🎧 EchoCrypt – Coverless Audio Steganography Using GANs
 
 ## 🚀 Project Overview
-
-EchoCrypt is a research-grade audio steganography system that uses **GAN-generated white noise** to hide binary data without modifying existing files — making it stealthy and virtually undetectable. It is a **coverless** method, meaning it generates audio that already contains the embedded data, unlike traditional stego methods that modify original media.
+EchoCrypt is a research-grade **crypto-steganography** system. It hides secret messages within GAN-generated audio and secures them with **AES encryption**. This two-layer approach ensures that even if the hidden audio is detected, the message remains unreadable without the correct password.
+It is a **coverless** method, meaning it generates new audio that already contains the encrypted data, rather than modifying an existing cover file.
 
 ---
 
@@ -42,14 +42,12 @@ EchoCrypt/
 └── main.py                 # Optional central execution point
 🧠 Technologies & Methods
 Coverless Audio Steganography
-
+**AES-256 (CBC mode)** for strong symmetric encryption
 GAN (Generative Adversarial Networks) for generating white noise that encodes binary data
-
 Differentiable STFT using PyTorch
-
 Optional CNN-based decoder for data extraction
 
-Tools: Python, PyTorch, Librosa, NumPy, SoundFile, TQDM, VS Code, GitHub Desktop
+Tools: Python, PyTorch, Gradio, Librosa, NumPy, SoundFile, PyCryptodome, TQDM
 
 ⚙️ Setup Instructions
 Recommended: Use Anaconda and Python 3.10+
@@ -68,16 +66,11 @@ conda activate echocrypt
 # Install dependencies
 pip install -r requirements.txt
 🧪 Usage Example
-The current implementation uses a **verification** method. You embed a message and then verify if a given audio file matches that specific message.
+The easiest way to use EchoCrypt is via the Gradio web interface.
 
-1. **Embed a secret message into an audio file:**
 ```bash
-python scripts/embed_data.py "your secret message here" -o "path/to/your/output.wav"
-```
-
-2. **Verify if the audio file contains your secret message:**
-```bash
-python scripts/extract_data.py "path/to/your/output.wav" "your secret message here"
+# Launch the web UI
+python app.py
 ```
 👩‍💻 Contributors
 Andrew Varghese Koshy – GAN Engineering
