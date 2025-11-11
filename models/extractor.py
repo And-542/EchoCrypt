@@ -27,33 +27,33 @@ class Extractor(nn.Module):
 
         self.model = nn.Sequential(
             # Input: (N, 1, 16000)
-            nn.Conv1d(1, 64, kernel_size=10, stride=10, padding=0, bias=False), # -> (N, 64, 1600)
+            nn.Conv1d(1, 64, kernel_size=500, stride=500, padding=0, bias=False), # -> (N, 64, 32)
             nn.LeakyReLU(0.2, inplace=True),
-            # State: (N, 64, 1600)
+            # State: (N, 64, 32)
 
-            nn.Conv1d(64, 128, kernel_size=10, stride=10, padding=0, bias=False), # -> (N, 128, 160)
+            nn.Conv1d(64, 128, kernel_size=4, stride=2, padding=1, bias=False),
             nn.BatchNorm1d(128),
             nn.LeakyReLU(0.2, inplace=True),
-            # State: (N, 128, 160)
+            # State: (N, 128, 16)
 
-            nn.Conv1d(128, 256, kernel_size=5, stride=5, padding=0, bias=False), # -> (N, 256, 32)
+            nn.Conv1d(128, 256, kernel_size=4, stride=2, padding=1, bias=False),
             nn.BatchNorm1d(256),
             nn.LeakyReLU(0.2, inplace=True),
-            # State: (N, 256, 32)
+            # State: (N, 256, 8)
 
-            nn.Conv1d(256, 512, kernel_size=8, stride=4, padding=0, bias=False), # -> (N, 512, 7)
+            nn.Conv1d(256, 512, kernel_size=4, stride=2, padding=1, bias=False),
             nn.BatchNorm1d(512),
             nn.LeakyReLU(0.2, inplace=True),
-            # State: (N, 512, 7)
+            # State: (N, 512, 4)
 
             # Flatten and project to latent dimension
-            nn.Flatten(),
-            nn.Linear(512 * 7, latent_dim),
-            nn.Tanh() # Add Tanh to constrain output to [-1, 1]
+            nn.Conv1d(512, latent_dim, kernel_size=4, stride=1, padding=0, bias=False),
+            nn.Tanh(), # Add Tanh to constrain output to [-1, 1]
+            nn.Flatten() # Flatten to (N, latent_dim)
         )
 
     def forward(self, x):
         # x is the audio waveform, shape (batch_size, length)
         # We need to reshape it to (batch_size, 1, length) for Conv1d
         out = self.model(x.unsqueeze(1))
-        return out # Return shape (batch_size, latent_dim)
+        return out.squeeze(-1) # Squeeze the last dimension to get (N, latent_dim)

@@ -21,8 +21,8 @@ BATCH_SIZE = 64
 LR_GEN = 0.0002  # Learning rate for the generator
 LR_DISC = 0.00005 # Slower learning rate for the discriminator
 BETA1 = 0.5  # Adam optimizer parameter
-LAMBDA_RECON = 2.0 # Weight for the reconstruction loss
-LATENT_DIM = 100
+LAMBDA_RECON = 10.0 # Weight for the reconstruction loss
+LATENT_DIM = 256
 G_UPDATES_PER_D = 2 # Update generator twice for every discriminator update
 NUM_BATCHES_PER_EPOCH = 1000 // BATCH_SIZE # For demonstration purposes
 SAMPLE_RATE = 16000
@@ -77,7 +77,7 @@ def main():
 
             # 1. Train with REAL audio
             real_audio = torch.randn(BATCH_SIZE, AUDIO_LENGTH_SAMPLES).to(DEVICE)
-            real_stft = get_stft(real_audio)
+            real_stft = get_stft(real_audio, n_fft=400, hop_length=160, win_length=400)
             disc_real = disc(real_stft).view(-1)
             loss_disc_real = criterion_gan(disc_real, torch.full_like(disc_real, 0.9))
             loss_disc_real.backward()
@@ -85,7 +85,7 @@ def main():
             # 2. Train with FAKE audio
             latent_vec = torch.randn(BATCH_SIZE, LATENT_DIM).to(DEVICE)
             fake_audio = gen(latent_vec)
-            fake_stft = get_stft(fake_audio.detach())
+            fake_stft = get_stft(fake_audio.detach(), n_fft=400, hop_length=160, win_length=400)
             disc_fake = disc(fake_stft).view(-1)
             loss_disc_fake = criterion_gan(disc_fake, torch.zeros_like(disc_fake))
             loss_disc_fake.backward()
@@ -105,12 +105,26 @@ def main():
 
                 # For the RECONSTRUCTION loss, we MUST use the same kind of binary vectors
                 # as our message embedder. This is the key to closing the domain gap.
-                binary_vec_recon = (torch.randint(0, 3, (BATCH_SIZE, LATENT_DIM), device=DEVICE) - 1).float() # Creates a tensor of -1, 0, 1
+                # --- Create realistic, structured binary vectors for training ---
+                recon_vectors = []
+                max_bytes = (LATENT_DIM - 8) // 8
+                for _ in range(BATCH_SIZE):
+                    # Create a random byte string of random length
+                    payload_len = torch.randint(1, max_bytes, (1,)).item()
+                    payload = os.urandom(payload_len) # Correctly generate a byte string of random length
+                    # Use the same logic as app.py to create the vector
+                    len_binary = format(len(payload), '08b')
+                    payload_binary = ''.join(format(byte, '08b') for byte in payload)
+                    full_binary = [1.0 if bit == '1' else -1.0 for bit in (len_binary + payload_binary)]
+                    padded_vector = full_binary + [0.0] * (LATENT_DIM - len(full_binary))
+                    recon_vectors.append(padded_vector)
+                
+                binary_vec_recon = torch.tensor(recon_vectors, dtype=torch.float32, device=DEVICE)
                 fake_audio_recon = gen(binary_vec_recon)
 
                 # --- Calculate GAN Loss for Generator ---
                 # We want the generator to produce audio that the discriminator thinks is REAL (label 1)
-                output = disc(get_stft(fake_audio_g)).view(-1)
+                output = disc(get_stft(fake_audio_g, n_fft=400, hop_length=160, win_length=400)).view(-1)
                 loss_gan_gen = criterion_gan(output, torch.ones_like(output))
 
                 # --- Calculate Reconstruction Loss for Autoencoder ---

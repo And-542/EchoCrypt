@@ -1,0 +1,8 @@
+--- EchoCrypt Training & Evaluation Report ---
+
+Final Model Performance (End-to-End with FEC):
+-------------------------------------------------
+Total Messages Tested: 10000
+Message Errors: 10000
+Final Message Error Rate (MER): 1.000000
+-------------------------------------------------

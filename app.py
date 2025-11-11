@@ -10,6 +10,7 @@ from scipy.io.wavfile import write as write_wav
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 from Crypto.Protocol.KDF import scrypt
+from reedsolo import RSCodec # For Forward Error Correction
 
 # Add the project root to the Python path to allow importing project modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -18,12 +19,13 @@ from models.generator import Generator
 from models.extractor import Extractor
 
 # --- Configuration ---
-LATENT_DIM = 100
+LATENT_DIM = 256 # Increased to accommodate FEC data
 GEN_MODEL_PATH = r"d:\EchoCrypt\EchoCrypt\models\saved_models\generator_final.pth"
 EXT_MODEL_PATH = r"d:\EchoCrypt\EchoCrypt\models\saved_models\extractor_final.pth"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SAMPLE_RATE = 16000
 AUDIO_LENGTH_SAMPLES = SAMPLE_RATE * 1
+FEC_SYMBOLS = 16 # Number of error correction bytes to add per chunk
 
 # --- Load Models (do this once on startup) ---
 print(f"Running on device: {DEVICE}")
@@ -113,8 +115,11 @@ def embed_message(message: str, password: str):
     payload = salt + cipher.iv + ciphertext
 
     # --- Chunking the Payload ---
-    # 8 bits for length prefix. The rest is for the payload.
-    max_payload_bytes = (LATENT_DIM - 8) // 8
+    # Each chunk will have data + FEC symbols.
+    # The total size of a chunk must fit into our latent vector.
+    max_chunk_size = (LATENT_DIM - 8) // 8 # Max bytes per vector (e.g., 11)
+    max_payload_bytes = max_chunk_size - FEC_SYMBOLS # Bytes available for actual data
+    rs = RSCodec(FEC_SYMBOLS)
     payload_chunks = [payload[i:i + max_payload_bytes] for i in range(0, len(payload), max_payload_bytes)]
     
     all_audio_chunks = []
@@ -122,7 +127,10 @@ def embed_message(message: str, password: str):
     for chunk in payload_chunks:
         try:
             # Convert the data chunk (bytes) to a latent vector
-            latent_vector = data_to_binary_vector(chunk, LATENT_DIM).to(DEVICE)
+            # Add FEC to the chunk before converting to a vector
+            fec_chunk = rs.encode(chunk)
+            latent_vector = data_to_binary_vector(fec_chunk, LATENT_DIM).to(DEVICE)
+
         except ValueError as e:
             raise gr.Error(str(e))
 
@@ -131,6 +139,10 @@ def embed_message(message: str, password: str):
         
         audio_data = generated_waveform.squeeze().cpu().numpy()
         all_audio_chunks.append(audio_data)
+
+    if not all_audio_chunks:
+        # This case should not be hit with correct logic, but it's a safe guard.
+        raise gr.Error("Failed to generate any audio chunks. The message might be empty or too short.")
 
     final_audio = np.concatenate(all_audio_chunks)
     
@@ -174,8 +186,16 @@ def extract_message(audio_filepath, password: str):
             extracted_vector = extractor(received_audio_tensor)
         
         # Convert vector back to data bytes
-        payload_chunk = binary_vector_to_data(extracted_vector)
-        full_payload += payload_chunk
+        # This chunk includes the FEC data
+        fec_chunk = binary_vector_to_data(extracted_vector)
+        
+        # --- Error Correction ---
+        try:
+            rs = RSCodec(FEC_SYMBOLS)
+            corrected_chunk = rs.decode(fec_chunk)[0] # decode returns (data, ecc)
+            full_payload += corrected_chunk
+        except Exception: # Catches Reed-Solomon errors if chunk is too corrupted
+            return "[Extraction Failed] Data is too corrupted to be recovered, even with FEC."
 
     if not full_payload:
         return "[No data found in audio]"

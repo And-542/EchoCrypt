@@ -101,7 +101,7 @@ def main():
     args = parser.parse_args()
 
     # --- Configuration ---
-    LATENT_DIM = 100
+    LATENT_DIM = 256
     MODEL_PATH = r"d:\EchoCrypt\EchoCrypt\models\saved_models\extractor_final.pth"
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     SAMPLE_RATE = 16000

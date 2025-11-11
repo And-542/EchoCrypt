@@ -38,18 +38,18 @@ class Generator(nn.Module):
             nn.ReLU(True),
             # State: (N, 256, 8)
 
-            nn.ConvTranspose1d(256, 128, 4, 4, 0, bias=False), # stride=4, padding=0 -> 128x32
+            nn.ConvTranspose1d(256, 128, 4, 2, 1, bias=False),
             nn.BatchNorm1d(128),
             nn.ReLU(True),
-            # State: (N, 128, 32)
+            # State: (N, 128, 16)
 
-            nn.ConvTranspose1d(128, 64, 5, 5, 0, bias=False), # stride=5, padding=0 -> 64x160
+            nn.ConvTranspose1d(128, 64, 4, 2, 1, bias=False),
             nn.BatchNorm1d(64),
             nn.ReLU(True),
-            # State: (N, 64, 160)
+            # State: (N, 64, 32)
 
-            # A single large kernel to generate the full waveform
-            nn.ConvTranspose1d(64, 1, 100, 100, 0, bias=False), # -> (N, 1, 16000)
+            # Upsample to the final audio length
+            nn.ConvTranspose1d(64, 1, 500, 500, 0, bias=False), # -> (N, 1, 16000)
             nn.Tanh()  # Normalize output to [-1, 1]
         )
 

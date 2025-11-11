@@ -1,47 +1,23 @@
 import torch
 
-# STFT parameters
-N_FFT = 1022
-HOP_LENGTH = 256
-WIN_LENGTH = 1022
-
-def get_stft(waveform, n_fft=N_FFT, hop_length=HOP_LENGTH, win_length=WIN_LENGTH):
+def get_stft(waveform: torch.Tensor, n_fft=400, hop_length=160, win_length=400) -> torch.Tensor:
     """
-    Computes the Short-Time Fourier Transform (STFT) of a waveform.
+    Calculates the Short-Time Fourier Transform (STFT) of a waveform in a
+    GPU-compatible way.
 
     Args:
-        waveform (torch.Tensor): The input audio waveform. Shape: (batch, time).
-        n_fft (int): Size of FFT.
-        hop_length (int): The distance between neighboring sliding window frames.
-        win_length (int): Each frame of audio is windowed by a window of this length.
+        waveform (torch.Tensor): The input audio waveform. Shape: (batch_size, num_samples)
 
     Returns:
-        torch.Tensor: The complex-valued STFT. Shape: (batch, freq, time, 2 for real/imag).
+        torch.Tensor: A real-valued tensor representing the complex STFT.
+                      Shape: (batch_size, freq_bins, time_frames, 2)
     """
-    window = torch.hann_window(win_length).to(waveform.device)
-    stft_out = torch.stft(
-        waveform,
-        n_fft=n_fft,
-        hop_length=hop_length,
-        win_length=win_length,
-        window=window,
-        return_complex=False # Returns a real tensor of shape (batch, freq, time, 2)
-    )
-    return stft_out
+    # Create a Hann window on the same device as the input waveform.
+    window = torch.hann_window(window_length=win_length, device=waveform.device)
 
-def get_istft(stft_out, hop_length=HOP_LENGTH, win_length=WIN_LENGTH):
-    """
-    Computes the inverse STFT to recover the audio waveform.
+    # Calculate the complex-valued STFT. This operation is supported on CUDA.
+    stft_complex = torch.stft(waveform, n_fft, hop_length, win_length, window, return_complex=True)
 
-    Args:
-        stft_out (torch.Tensor): The complex-valued STFT from get_stft.
-        hop_length (int): The distance between neighboring sliding window frames.
-        win_length (int): Each frame of audio is windowed by a window of this length.
-
-    Returns:
-        torch.Tensor: The reconstructed waveform.
-    """
-    # Convert the real tensor back to a complex tensor for istft
-    stft_complex = torch.view_as_complex(stft_out)
-    waveform = torch.istft(stft_complex, n_fft=N_FFT, hop_length=hop_length, win_length=win_length)
-    return waveform
+    # Convert the complex tensor to a real tensor with a new last dimension for real/imaginary parts.
+    # This is the format the discriminator expects.
+    return torch.view_as_real(stft_complex)
