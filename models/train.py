@@ -6,30 +6,37 @@ import os
 from tqdm import tqdm
 import csv
 
+# For Forward Error Correction
+from reedsolo import RSCodec
+
 # Add the project root to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import our custom modules
 from models.generator import Generator
 from models.discriminator import Discriminator
-from models.extractor import Extractor # Import the Extractor
-from utils.audio_tools import get_stft
+from models.extractor import Extractor
 
 # --- Hyperparameters ---
-EPOCHS = 100
+EPOCHS = 200 # Train for longer as the loss is still decreasing
 BATCH_SIZE = 64
-LR_GEN = 0.0002  # Learning rate for the generator
-LR_DISC = 0.00005 # Slower learning rate for the discriminator
+LR_GEN = 0.0002  # Slightly slower learning rate for more stable convergence
+LR_DISC = 0.00001 # Make the discriminator learn much slower
 BETA1 = 0.5  # Adam optimizer parameter
-LAMBDA_RECON = 10.0 # Weight for the reconstruction loss
+LAMBDA_RECON = 100.0 # Prioritize reconstruction even more to reduce bit errors
 LATENT_DIM = 256
-G_UPDATES_PER_D = 2 # Update generator twice for every discriminator update
-NUM_BATCHES_PER_EPOCH = 1000 // BATCH_SIZE # For demonstration purposes
+G_UPDATES_PER_D = 1 # With decoupled training, 1:1 is more stable
+FEC_SYMBOLS = 16 # Number of error correction bytes (must match app.py)
+
+MAX_CHUNK_SIZE = (LATENT_DIM - 8) // 8
+MAX_PAYLOAD_BYTES_PER_CHUNK = MAX_CHUNK_SIZE - FEC_SYMBOLS
+
+NUM_BATCHES_PER_EPOCH = 100 # Increase training steps per epoch significantly
 SAMPLE_RATE = 16000
 AUDIO_LENGTH_SECONDS = 1
 AUDIO_LENGTH_SAMPLES = SAMPLE_RATE * AUDIO_LENGTH_SECONDS
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_SAVE_PATH = r"d:\EchoCrypt\EchoCrypt\models\saved_models"
+MODEL_SAVE_PATH = "d:/EchoCrypt/EchoCrypt/models/saved_models"
 SAVE_INTERVAL = 10  # Save models every 10 epochs
 
 def main():
@@ -47,20 +54,23 @@ def main():
 
     # --- Models ---
     # Note: The Generator is designed to output a raw waveform of a specific length.
-    gen = Generator(latent_dim=LATENT_DIM, output_length=AUDIO_LENGTH_SAMPLES).to(DEVICE)
+    gen = Generator(latent_dim=LATENT_DIM).to(DEVICE)
     disc = Discriminator().to(DEVICE)
-    ext = Extractor(input_length=AUDIO_LENGTH_SAMPLES, latent_dim=LATENT_DIM).to(DEVICE)
+    ext = Extractor(latent_dim=LATENT_DIM).to(DEVICE)
 
     # --- Optimizers & Loss ---
     opt_gen = optim.Adam(gen.parameters(), lr=LR_GEN, betas=(BETA1, 0.999))
     opt_disc = optim.Adam(disc.parameters(), lr=LR_DISC, betas=(BETA1, 0.999))
     opt_ext = optim.Adam(ext.parameters(), lr=LR_GEN, betas=(BETA1, 0.999)) # Extractor can share LR with Gen
     criterion_gan = nn.BCEWithLogitsLoss() # For GAN loss
-    criterion_recon = nn.MSELoss() # For reconstruction loss
+    criterion_recon = nn.L1Loss() # Use L1 Loss for sharper reconstruction
 
     # --- Logging Setup ---
     log_file_path = os.path.join(MODEL_SAVE_PATH, "training_log.csv")
     log_history = []
+
+    # --- FEC Setup ---
+    rs = RSCodec(FEC_SYMBOLS)
 
     # --- Training Loop ---
     for epoch in range(EPOCHS):
@@ -76,17 +86,15 @@ def main():
             disc.zero_grad()
 
             # 1. Train with REAL audio
-            real_audio = torch.randn(BATCH_SIZE, AUDIO_LENGTH_SAMPLES).to(DEVICE)
-            real_stft = get_stft(real_audio, n_fft=400, hop_length=160, win_length=400)
-            disc_real = disc(real_stft).view(-1)
+            real_audio = torch.randn(BATCH_SIZE, 1, AUDIO_LENGTH_SAMPLES).to(DEVICE)
+            disc_real = disc(real_audio).view(-1)
             loss_disc_real = criterion_gan(disc_real, torch.full_like(disc_real, 0.9))
             loss_disc_real.backward()
 
             # 2. Train with FAKE audio
             latent_vec = torch.randn(BATCH_SIZE, LATENT_DIM).to(DEVICE)
             fake_audio = gen(latent_vec)
-            fake_stft = get_stft(fake_audio.detach(), n_fft=400, hop_length=160, win_length=400)
-            disc_fake = disc(fake_stft).view(-1)
+            disc_fake = disc(fake_audio.detach()).view(-1)
             loss_disc_fake = criterion_gan(disc_fake, torch.zeros_like(disc_fake))
             loss_disc_fake.backward()
 
@@ -98,48 +106,47 @@ def main():
                 gen.zero_grad()
                 ext.zero_grad()
 
-                # Generate a new batch of fake audio for each generator update
-                # For the GAN loss, we use a standard random vector to ensure variety
-                latent_vec_gan = torch.randn(BATCH_SIZE, LATENT_DIM).to(DEVICE)
-                fake_audio_g = gen(latent_vec_gan)
-
-                # For the RECONSTRUCTION loss, we MUST use the same kind of binary vectors
-                # as our message embedder. This is the key to closing the domain gap.
+                # --- Phase 1: Train the Autoencoder (Generator + Extractor) for Reconstruction ---
                 # --- Create realistic, structured binary vectors for training ---
+                # This now perfectly mirrors the logic in app.py and calculate_metrics.py
                 recon_vectors = []
-                max_bytes = (LATENT_DIM - 8) // 8
                 for _ in range(BATCH_SIZE):
-                    # Create a random byte string of random length
-                    payload_len = torch.randint(1, max_bytes, (1,)).item()
-                    payload = os.urandom(payload_len) # Correctly generate a byte string of random length
-                    # Use the same logic as app.py to create the vector
-                    len_binary = format(len(payload), '08b')
-                    payload_binary = ''.join(format(byte, '08b') for byte in payload)
+                    # 1. Create a random payload chunk (as if it came from a larger message)
+                    # We simulate a single chunk, as that's what the model processes.
+                    chunk_len = torch.randint(1, MAX_PAYLOAD_BYTES_PER_CHUNK + 1, (1,)).item()
+                    payload_chunk = os.urandom(chunk_len)
+
+                    # 2. Add FEC to the chunk
+                    fec_chunk = rs.encode(payload_chunk)
+
+                    # 3. Convert the FEC-enhanced chunk to a binary vector
+                    # This is the "data_to_binary_vector" logic
+                    len_binary = format(len(fec_chunk), '08b')
+                    payload_binary = ''.join(format(byte, '08b') for byte in fec_chunk)
                     full_binary = [1.0 if bit == '1' else -1.0 for bit in (len_binary + payload_binary)]
+
+                    # 4. Pad the vector to the full latent dimension
                     padded_vector = full_binary + [0.0] * (LATENT_DIM - len(full_binary))
                     recon_vectors.append(padded_vector)
-                
+
                 binary_vec_recon = torch.tensor(recon_vectors, dtype=torch.float32, device=DEVICE)
                 fake_audio_recon = gen(binary_vec_recon)
-
-                # --- Calculate GAN Loss for Generator ---
-                # We want the generator to produce audio that the discriminator thinks is REAL (label 1)
-                output = disc(get_stft(fake_audio_g, n_fft=400, hop_length=160, win_length=400)).view(-1)
-                loss_gan_gen = criterion_gan(output, torch.ones_like(output))
-
-                # --- Calculate Reconstruction Loss for Autoencoder ---
-                # We want the extractor to reconstruct the original latent vector from the fake audio
                 reconstructed_vec = ext(fake_audio_recon)
                 loss_recon = criterion_recon(reconstructed_vec, binary_vec_recon)
 
-                # --- Combined Loss ---
-                # The generator is updated by both losses. The extractor is only updated by the reconstruction loss.
-                # Backpropagating this combined loss updates both G and E based on their respective contributions.
-                loss_gen_combined = loss_gan_gen + LAMBDA_RECON * loss_recon
-                loss_gen_combined.backward()
-
+                # Update BOTH G and E to be a perfect autoencoder pair.
+                (LAMBDA_RECON * loss_recon).backward()
                 opt_gen.step()
                 opt_ext.step()
+
+                # --- Phase 2: Train the Generator to fool the Discriminator ---
+                gen.zero_grad()
+                latent_vec_gan = torch.randn(BATCH_SIZE, LATENT_DIM).to(DEVICE)
+                fake_audio_g = gen(latent_vec_gan)
+                output = disc(fake_audio_g).view(-1)
+                loss_gan_gen = criterion_gan(output, torch.ones_like(output))
+                loss_gan_gen.backward()
+                opt_gen.step()
 
             # Accumulate losses for epoch average
             epoch_loss_d += loss_disc.item()

@@ -4,56 +4,43 @@ import torch.nn as nn
 class Extractor(nn.Module):
     """
     An Extractor model to recover a latent vector from an audio waveform.
-
-    In the context of steganography, this model acts as the **Decoder**, as it
-    extracts the hidden information (the latent vector) from the carrier signal (the audio).
-
-    In the context of an autoencoder architecture, this model acts as the **Encoder**,
-    as it compresses the high-dimensional audio input into a low-dimensional latent space.
-    It is designed to be the architectural inverse of the Generator (which acts as the Decoder
-    in an autoencoder).
+    This architecture is the exact mirror of the new Generator.
     """
-    def __init__(self, input_length=16000, latent_dim=100):
+    def __init__(self, latent_dim=256):
         """
         Initializes the Extractor model.
-
-        Args:
-            input_length (int): The length of the input audio waveform.
-            latent_dim (int): The dimensionality of the output latent vector.
         """
         super(Extractor, self).__init__()
-        self.input_length = input_length
         self.latent_dim = latent_dim
 
         self.model = nn.Sequential(
             # Input: (N, 1, 16000)
-            nn.Conv1d(1, 64, kernel_size=500, stride=500, padding=0, bias=False), # -> (N, 64, 32)
+            nn.Conv1d(1, 32, kernel_size=5, stride=20, padding=2, bias=False), # -> (N, 32, 800)
+            nn.BatchNorm1d(32),
             nn.LeakyReLU(0.2, inplace=True),
-            # State: (N, 64, 32)
 
-            nn.Conv1d(64, 128, kernel_size=4, stride=2, padding=1, bias=False),
+            nn.Conv1d(32, 64, kernel_size=5, stride=4, padding=2, bias=False), # -> (N, 64, 200)
+            nn.BatchNorm1d(64),
+            nn.LeakyReLU(0.2, inplace=True),
+
+            nn.Conv1d(64, 128, kernel_size=5, stride=5, padding=2, bias=False), # -> (N, 128, 40)
             nn.BatchNorm1d(128),
             nn.LeakyReLU(0.2, inplace=True),
-            # State: (N, 128, 16)
 
-            nn.Conv1d(128, 256, kernel_size=4, stride=2, padding=1, bias=False),
+            nn.Conv1d(128, 256, kernel_size=5, stride=5, padding=2, bias=False), # -> (N, 256, 8)
             nn.BatchNorm1d(256),
             nn.LeakyReLU(0.2, inplace=True),
-            # State: (N, 256, 8)
 
-            nn.Conv1d(256, 512, kernel_size=4, stride=2, padding=1, bias=False),
+            nn.Conv1d(256, 512, kernel_size=4, stride=2, padding=1, bias=False), # -> (N, 512, 4)
             nn.BatchNorm1d(512),
             nn.LeakyReLU(0.2, inplace=True),
-            # State: (N, 512, 4)
 
-            # Flatten and project to latent dimension
-            nn.Conv1d(512, latent_dim, kernel_size=4, stride=1, padding=0, bias=False),
-            nn.Tanh(), # Add Tanh to constrain output to [-1, 1]
-            nn.Flatten() # Flatten to (N, latent_dim)
+            nn.Conv1d(512, latent_dim, kernel_size=4, stride=1, padding=0, bias=False), # -> (N, latent_dim, 1)
+            # No Tanh here, as the latent vector was not bounded to [-1, 1] before encoding
         )
 
     def forward(self, x):
-        # x is the audio waveform, shape (batch_size, length)
-        # We need to reshape it to (batch_size, 1, length) for Conv1d
-        out = self.model(x.unsqueeze(1))
-        return out.squeeze(-1) # Squeeze the last dimension to get (N, latent_dim)
+        # x is the audio waveform, shape (batch_size, 1, length)
+        out = self.model(x)
+        # Squeeze the last two dimensions (H, W) which are (latent_dim, 1) -> (latent_dim)
+        return out.squeeze(-1).squeeze(-1)

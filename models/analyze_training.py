@@ -153,7 +153,7 @@ def main():
     # 3. Generate visual comparisons
     try:
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        generator = Generator(latent_dim=LATENT_DIM, output_length=AUDIO_LENGTH_SAMPLES)
+        generator = Generator(latent_dim=LATENT_DIM)
         generator.load_state_dict(torch.load(GEN_MODEL_PATH, map_location=device, weights_only=True))
         generator.to(device)
 

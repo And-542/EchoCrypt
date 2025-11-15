@@ -20,8 +20,8 @@ from models.extractor import Extractor
 
 # --- Configuration ---
 LATENT_DIM = 256 # Increased to accommodate FEC data
-GEN_MODEL_PATH = r"d:\EchoCrypt\EchoCrypt\models\saved_models\generator_final.pth"
-EXT_MODEL_PATH = r"d:\EchoCrypt\EchoCrypt\models\saved_models\extractor_final.pth"
+GEN_MODEL_PATH = "d:/EchoCrypt/EchoCrypt/models/saved_models/generator_final.pth"
+EXT_MODEL_PATH = "d:/EchoCrypt/EchoCrypt/models/saved_models/extractor_final.pth"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SAMPLE_RATE = 16000
 AUDIO_LENGTH_SAMPLES = SAMPLE_RATE * 1
@@ -31,13 +31,13 @@ FEC_SYMBOLS = 16 # Number of error correction bytes to add per chunk
 print(f"Running on device: {DEVICE}")
 
 print(f"💿 Loading Generator model from {GEN_MODEL_PATH}")
-generator = Generator(latent_dim=LATENT_DIM, output_length=AUDIO_LENGTH_SAMPLES)
+generator = Generator(latent_dim=LATENT_DIM)
 generator.load_state_dict(torch.load(GEN_MODEL_PATH, map_location=DEVICE, weights_only=True))
 generator.to(DEVICE)
 generator.eval()
 
 print(f"💿 Loading Extractor model from {EXT_MODEL_PATH}")
-extractor = Extractor(input_length=AUDIO_LENGTH_SAMPLES, latent_dim=LATENT_DIM)
+extractor = Extractor(latent_dim=LATENT_DIM)
 extractor.load_state_dict(torch.load(EXT_MODEL_PATH, map_location=DEVICE, weights_only=True))
 extractor.to(DEVICE)
 extractor.eval()
@@ -81,17 +81,26 @@ def binary_vector_to_data(vector: torch.Tensor) -> bytes:
     if len(binary_string) < 8:
         return b""
     length_binary = binary_string[:8]
-    message_length = int(length_binary, 2)
-
-    # Extract the payload
-    message_binary = binary_string[8 : 8 + message_length * 8]
-    byte_chunks = [message_binary[i:i+8] for i in range(0, len(message_binary), 8)]
+    try:
+        message_length = int(length_binary, 2)
+    except ValueError:
+        return b"" # Invalid length prefix
     
-    data_bytes = bytearray()
-    for byte in byte_chunks:
-        if len(byte) == 8:
-            data_bytes.append(int(byte, 2))
-    return bytes(data_bytes)
+    # The total number of bits to read is the header (8) + the payload bits.
+    total_bits = 8 + message_length * 8
+    if len(binary_string) < total_bits:
+        return b"" # Not enough data
+
+    # Slice the exact portion of the binary string that represents the data.
+    data_binary = binary_string[8:total_bits]
+    byte_chunks = [data_binary[i:i+8] for i in range(0, len(data_binary), 8)]
+    
+    try:
+        # Use a robust method to convert binary strings to bytes
+        return b"".join([int(b, 2).to_bytes(1, 'big') for b in byte_chunks])
+    except (ValueError, OverflowError):
+        # This can happen if the binary string is malformed
+        return b""
 
 # --- Gradio Interface Functions ---
 
@@ -180,7 +189,7 @@ def extract_message(audio_filepath, password: str):
     full_payload = b""
     for i in range(num_chunks):
         chunk_audio = received_audio[i * AUDIO_LENGTH_SAMPLES : (i + 1) * AUDIO_LENGTH_SAMPLES]
-        received_audio_tensor = torch.from_numpy(chunk_audio).to(DEVICE).unsqueeze(0)
+        received_audio_tensor = torch.from_numpy(chunk_audio).to(DEVICE).unsqueeze(0).unsqueeze(0) # Shape: (1, 1, 16000)
 
         with torch.no_grad():
             extracted_vector = extractor(received_audio_tensor)
@@ -192,8 +201,11 @@ def extract_message(audio_filepath, password: str):
         # --- Error Correction ---
         try:
             rs = RSCodec(FEC_SYMBOLS)
-            corrected_chunk = rs.decode(fec_chunk)[0] # decode returns (data, ecc)
+            # The library expects a mutable bytearray.
+            data_byte_array = bytearray(fec_chunk)
+            corrected_chunk, _, _ = rs.decode(data_byte_array)
             full_payload += corrected_chunk
+
         except Exception: # Catches Reed-Solomon errors if chunk is too corrupted
             return "[Extraction Failed] Data is too corrupted to be recovered, even with FEC."
 
