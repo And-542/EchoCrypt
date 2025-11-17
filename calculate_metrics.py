@@ -62,17 +62,17 @@ def binary_vector_to_data_silent(vector: torch.Tensor) -> bytes:
         return b"" # Invalid length prefix
         
     # The total number of bits to read is the header (8) + the payload bits.
-    total_bits = 8 + message_length * 8
-    if len(binary_string) < total_bits:
+    total_bits_to_read = 8 + message_length * 8
+    if len(binary_string) < total_bits_to_read:
         return b"" # Not enough data to form a full message
 
     # Slice the exact portion of the binary string that represents the data.
-    data_binary = binary_string[8:total_bits]
+    data_binary = binary_string[8:total_bits_to_read]
     byte_chunks = [data_binary[i:i+8] for i in range(0, len(data_binary), 8)]
 
     try:
         # Use a robust method to convert binary strings to bytes
-        return b"".join([int(b, 2).to_bytes(1, 'big') for b in byte_chunks])
+        return b"".join(int(b, 2).to_bytes(1, 'big') for b in byte_chunks)
     except (ValueError, OverflowError):
         return b""
 

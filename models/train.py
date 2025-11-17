@@ -41,6 +41,7 @@ SAVE_INTERVAL = 10  # Save models every 10 epochs
 
 def main():
     """Main training loop for the GAN."""
+    torch.autograd.set_detect_anomaly(True)
     # --- Device Check ---
     print("--------------------")
     print(f"PyTorch CUDA available: {torch.cuda.is_available()}")
@@ -101,18 +102,16 @@ def main():
             loss_disc = (loss_disc_real + loss_disc_fake) / 2
             opt_disc.step()
 
-            # --- Train Generator (multiple times) ---
+            # --- Train Generator & Extractor ---
             for _ in range(G_UPDATES_PER_D):
                 gen.zero_grad()
                 ext.zero_grad()
 
-                # --- Phase 1: Train the Autoencoder (Generator + Extractor) for Reconstruction ---
                 # --- Create realistic, structured binary vectors for training ---
                 # This now perfectly mirrors the logic in app.py and calculate_metrics.py
                 recon_vectors = []
                 for _ in range(BATCH_SIZE):
                     # 1. Create a random payload chunk (as if it came from a larger message)
-                    # We simulate a single chunk, as that's what the model processes.
                     chunk_len = torch.randint(1, MAX_PAYLOAD_BYTES_PER_CHUNK + 1, (1,)).item()
                     payload_chunk = os.urandom(chunk_len)
 
@@ -120,7 +119,6 @@ def main():
                     fec_chunk = rs.encode(payload_chunk)
 
                     # 3. Convert the FEC-enhanced chunk to a binary vector
-                    # This is the "data_to_binary_vector" logic
                     len_binary = format(len(fec_chunk), '08b')
                     payload_binary = ''.join(format(byte, '08b') for byte in fec_chunk)
                     full_binary = [1.0 if bit == '1' else -1.0 for bit in (len_binary + payload_binary)]
@@ -130,23 +128,29 @@ def main():
                     recon_vectors.append(padded_vector)
 
                 binary_vec_recon = torch.tensor(recon_vectors, dtype=torch.float32, device=DEVICE)
+
+                # --- Forward Pass ---
                 fake_audio_recon = gen(binary_vec_recon)
+
+                # --- Calculate Losses ---
+                # 1. Reconstruction Loss (for Generator and Extractor)
                 reconstructed_vec = ext(fake_audio_recon)
                 loss_recon = criterion_recon(reconstructed_vec, binary_vec_recon)
 
-                # Update BOTH G and E to be a perfect autoencoder pair.
-                (LAMBDA_RECON * loss_recon).backward()
+                # 2. GAN Loss (for Generator to fool Discriminator)
+                output = disc(fake_audio_recon).view(-1)
+                loss_gan_gen = criterion_gan(output, torch.ones_like(output))
+
+                # --- Combine Losses and Backpropagate ---
+                # The total loss for the generator and extractor update step.
+                # Gradients flow to Extractor only from loss_recon.
+                # Gradients flow to Generator from both losses.
+                total_g_loss = loss_gan_gen + LAMBDA_RECON * loss_recon
+                total_g_loss.backward()
+
+                # --- Update Weights ---
                 opt_gen.step()
                 opt_ext.step()
-
-                # --- Phase 2: Train the Generator to fool the Discriminator ---
-                gen.zero_grad()
-                latent_vec_gan = torch.randn(BATCH_SIZE, LATENT_DIM).to(DEVICE)
-                fake_audio_g = gen(latent_vec_gan)
-                output = disc(fake_audio_g).view(-1)
-                loss_gan_gen = criterion_gan(output, torch.ones_like(output))
-                loss_gan_gen.backward()
-                opt_gen.step()
 
             # Accumulate losses for epoch average
             epoch_loss_d += loss_disc.item()

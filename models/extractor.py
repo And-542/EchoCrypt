@@ -36,7 +36,7 @@ class Extractor(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
 
             nn.Conv1d(512, latent_dim, kernel_size=4, stride=1, padding=0, bias=False), # -> (N, latent_dim, 1)
-            # No Tanh here, as the latent vector was not bounded to [-1, 1] before encoding
+            nn.Tanh() # Bound the output to [-1, 1] to match the input vector representation
         )
 
     def forward(self, x):
