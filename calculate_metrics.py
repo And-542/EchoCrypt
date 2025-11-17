@@ -57,6 +57,10 @@ def main():
 
     # --- Initialize Metrics ---
     total_message_errors = 0
+    total_bit_errors = 0
+    total_bits_tested = 0
+    total_snr = 0.0
+    total_chunks_processed = 0
     rs = RSCodec(FEC_SYMBOLS)
 
     # --- Evaluation Loop ---
@@ -90,12 +94,34 @@ def main():
                 # Autoencoder pass
                 with torch.no_grad():
                     generated_audio = generator(original_vector)
-                    extracted_vector = extractor(generated_audio) # Shape is already (1, 1, 16000)
+                    extracted_vector = extractor(generated_audio)
+
+                # --- Calculate BER (before FEC) ---
+                original_vec_cpu = original_vector.squeeze().cpu().numpy()
+                extracted_vec_cpu = extracted_vector.squeeze().cpu().numpy()
+                binarized_extracted = np.where(extracted_vec_cpu > 0, 1.0, -1.0)
+                
+                # Only compare non-padded bits
+                data_indices = np.where(original_vec_cpu != 0.0)[0]
+                if len(data_indices) > 0:
+                    bit_errors_in_chunk = np.sum(original_vec_cpu[data_indices] != binarized_extracted[data_indices])
+                    total_bit_errors += bit_errors_in_chunk
+                    total_bits_tested += len(data_indices)
+
+                # --- Calculate SNR ---
+                with torch.no_grad():
+                    # Generate a "clean" noise audio for comparison
+                    noise_vec = torch.randn(1, LATENT_DIM, device=DEVICE)
+                    clean_audio = generator(noise_vec)
+                    signal_power = torch.mean(clean_audio.pow(2))
+                    noise_power = torch.mean((generated_audio - clean_audio).pow(2))
+                    snr = 10 * torch.log10(signal_power / noise_power) if noise_power > 0 else float('inf')
+                    total_snr += snr.item()
+                    total_chunks_processed += 1
 
                 # Convert back to data
                 extracted_fec_chunk = binary_vector_to_data(extracted_vector.cpu())
 
-                # Perform error correction
                 try:
                     # The library expects a mutable bytearray. This is a critical detail.
                     data_byte_array = bytearray(extracted_fec_chunk)
@@ -117,19 +143,27 @@ def main():
 
     # --- Final Results ---
     mer = (total_message_errors / NUM_TEST_MESSAGES) if NUM_TEST_MESSAGES > 0 else 0
+    ber = (total_bit_errors / total_bits_tested) if total_bits_tested > 0 else 0
+    avg_snr = (total_snr / total_chunks_processed) if total_chunks_processed > 0 else 0
 
     print("\n--- Final Metrics (with FEC) ---")
     print(f"Total Messages Tested: {NUM_TEST_MESSAGES}")
     print("-----------------------")
+    print(f"📈 Average Signal-to-Noise Ratio (SNR): {avg_snr:.2f} dB")
+    print(f"📉 Bit Error Rate (BER) [pre-FEC]:    {ber:.6f} ({total_bit_errors}/{total_bits_tested} bit errors)")
     print(f"📊 Final Message Error Rate (MER):  {mer:.6f} ({total_message_errors} errors)")
     print("-----------------------")
-    print("This MER reflects the end-to-end reliability of the system, including error correction.")
+    print("SNR: Higher is better (less audible distortion).")
+    print("BER: The raw error rate of the neural network before correction.")
+    print("MER: The final, end-to-end reliability of the system after error correction.")
 
     # Return the metrics as a dictionary so other scripts can use them
     return {
         "Total Messages Tested": NUM_TEST_MESSAGES,
+        "Average SNR (dB)": f"{avg_snr:.2f}",
+        "Bit Error Rate (BER)": f"{ber:.6f}",
         "Message Errors": total_message_errors,
-        "Final Message Error Rate (MER)": f"{mer:.6f}"
+        "Final Message Error Rate (MER)": f"{mer:.6f}",
     }
 
 
