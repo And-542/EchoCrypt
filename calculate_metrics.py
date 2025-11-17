@@ -12,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from reedsolo import RSCodec
 from models.generator import Generator
 from models.extractor import Extractor
+from utils.conversion import data_to_binary_vector, binary_vector_to_data
 
 # --- Configuration ---
 NUM_TEST_MESSAGES = 10000  # Number of random messages to test
@@ -33,48 +34,6 @@ def generate_random_message(max_len: int) -> str:
     """Generates a random string of printable characters."""
     length = random.randint(1, max_len)
     return ''.join(random.choices(string.printable, k=length))
-
-def data_to_binary_vector_silent(data_bytes: bytes, latent_dim: int) -> torch.Tensor:
-    """
-    Converts a byte string into a binary latent vector without printing logs.
-    """
-    HEADER_BITS = 8
-    max_payload_bytes = (latent_dim - HEADER_BITS) // 8
-    if len(data_bytes) > max_payload_bytes:
-        raise ValueError(f"Data payload is too long for one chunk. Max length: {max_payload_bytes} bytes.")
-
-    binary_payload = ''.join(format(byte, '08b') for byte in data_bytes)
-    length_binary = format(len(data_bytes), f'0{HEADER_BITS}b')
-    full_binary_string = length_binary + binary_payload
-    binary_values = [1.0 if bit == '1' else -1.0 for bit in full_binary_string]
-    padding_size = latent_dim - len(binary_values)
-    padded_vector = binary_values + [0.0] * padding_size
-    return torch.tensor(padded_vector, dtype=torch.float32).unsqueeze(0)
-
-def binary_vector_to_data_silent(vector: torch.Tensor) -> bytes:
-    """Converts a binary latent vector back into a byte string."""
-    binary_string = ''.join(['1' if val > 0 else '0' for val in vector.squeeze()])
-    if len(binary_string) < 8: return b""
-    length_binary = binary_string[:8]
-    try:
-        message_length = int(length_binary, 2)
-    except ValueError:
-        return b"" # Invalid length prefix
-        
-    # The total number of bits to read is the header (8) + the payload bits.
-    total_bits_to_read = 8 + message_length * 8
-    if len(binary_string) < total_bits_to_read:
-        return b"" # Not enough data to form a full message
-
-    # Slice the exact portion of the binary string that represents the data.
-    data_binary = binary_string[8:total_bits_to_read]
-    byte_chunks = [data_binary[i:i+8] for i in range(0, len(data_binary), 8)]
-
-    try:
-        # Use a robust method to convert binary strings to bytes
-        return b"".join(int(b, 2).to_bytes(1, 'big') for b in byte_chunks)
-    except (ValueError, OverflowError):
-        return b""
 
 def main():
     """Main evaluation loop to calculate BER, MER, and SNR."""
@@ -126,7 +85,7 @@ def main():
                 fec_chunk = rs.encode(chunk)
 
                 # Convert to vector
-                original_vector = data_to_binary_vector_silent(fec_chunk, LATENT_DIM).to(DEVICE)
+                original_vector = data_to_binary_vector(fec_chunk, LATENT_DIM).to(DEVICE)
 
                 # Autoencoder pass
                 with torch.no_grad():
@@ -134,7 +93,7 @@ def main():
                     extracted_vector = extractor(generated_audio) # Shape is already (1, 1, 16000)
 
                 # Convert back to data
-                extracted_fec_chunk = binary_vector_to_data_silent(extracted_vector.cpu())
+                extracted_fec_chunk = binary_vector_to_data(extracted_vector.cpu())
 
                 # Perform error correction
                 try:
