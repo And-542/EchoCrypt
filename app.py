@@ -1,7 +1,7 @@
 import gradio as gr
 import torch
 import numpy as np
-import soundfile as sf
+import librosa # Use librosa for more robust audio loading
 import os
 import sys
 from scipy.io.wavfile import write as write_wav
@@ -20,13 +20,13 @@ from models.extractor import Extractor
 from utils.conversion import data_to_binary_vector, binary_vector_to_data
 
 # --- Configuration ---
-LATENT_DIM = 256 # Increased to accommodate FEC data
+LATENT_DIM = 256 # Must match the trained models
 GEN_MODEL_PATH = "d:/EchoCrypt/EchoCrypt/models/saved_models/generator_final.pth"
 EXT_MODEL_PATH = "d:/EchoCrypt/EchoCrypt/models/saved_models/extractor_final.pth"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SAMPLE_RATE = 16000
 AUDIO_LENGTH_SAMPLES = SAMPLE_RATE * 1
-FEC_SYMBOLS = 16 # Number of error correction bytes to add per chunk
+FEC_SYMBOLS = 24 # Number of error correction bytes to add per chunk
 
 # --- Load Models (do this once on startup) ---
 print(f"Running on device: {DEVICE}")
@@ -120,11 +120,15 @@ def extract_message(audio_filepath, password: str):
     if not password:
         raise gr.Error("Password cannot be empty.")
 
-    # Read the audio file using soundfile since we get a filepath
-    received_audio, sr = sf.read(audio_filepath, dtype='float32')
+    # Use librosa to read the audio file. It can handle many more formats, including mp4.
+    # We specify the target sample rate to automatically resample.
+    try:
+        received_audio, sr = librosa.load(audio_filepath, sr=SAMPLE_RATE, mono=True)
+    except Exception as e:
+        return f"[Error] Failed to load or process audio file. It might be an unsupported format or corrupted. Details: {e}"
 
     if sr != SAMPLE_RATE:
-        # In a real app, you'd resample. For now, we'll raise an error.
+        # This check is redundant if librosa resampling works, but good for safety.
         return f"[Error] Audio sample rate ({sr}Hz) does not match model's required rate ({SAMPLE_RATE}Hz)."
 
     if received_audio.dtype != np.float32:
@@ -138,14 +142,14 @@ def extract_message(audio_filepath, password: str):
     full_payload = b""
     for i in range(num_chunks):
         chunk_audio = received_audio[i * AUDIO_LENGTH_SAMPLES : (i + 1) * AUDIO_LENGTH_SAMPLES]
-        received_audio_tensor = torch.from_numpy(chunk_audio).to(DEVICE).unsqueeze(0).unsqueeze(0) # Shape: (1, 1, 16000)
+        received_audio_tensor = torch.from_numpy(chunk_audio).to(DEVICE).unsqueeze(0).unsqueeze(1) # Shape: (1, 1, 16000)
 
         with torch.no_grad():
-            extracted_vector = extractor(received_audio_tensor)
+            extracted_vector = extractor(received_audio_tensor) # Expects (batch, samples)
         
         # Convert vector back to data bytes
         # This chunk includes the FEC data
-        fec_chunk = binary_vector_to_data(extracted_vector)
+        fec_chunk = binary_vector_to_data(extracted_vector.cpu())
         
         # --- Error Correction ---
         try:
@@ -189,7 +193,7 @@ def toggle_password_visibility(is_visible):
 
 # --- Build and Launch the Gradio App ---
 
-with gr.Blocks(theme=gr.themes.Soft()) as demo:
+with gr.Blocks() as demo:
     gr.Markdown(
         """
         # 🎧 EchoCrypt: Audio Steganography 
@@ -208,7 +212,7 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
 
                 embed_button = gr.Button("Generate Audio", variant="primary")
             with gr.Column():
-                embed_output_audio = gr.Audio(label="Generated Audio with Hidden Message", type="filepath", show_download_button=True)
+                embed_output_audio = gr.Audio(label="Generated Audio with Hidden Message", type="filepath")
                 download_file = gr.File(label="Download Audio File", visible=False)
         embed_button.click(
             fn=embed_message,
@@ -225,7 +229,11 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
     with gr.Tab("Extract Message"):
         with gr.Row():
             with gr.Column():
-                extract_input_audio = gr.Audio(label="Upload Audio File", type="filepath")
+                # Use gr.File instead of gr.Audio to allow any file type, bypassing MIME type checks
+                extract_input_file = gr.File(
+                    label="Upload Audio/Video File (.wav, .mp3, .mp4, etc.)",
+                    type="filepath",
+                )
                 with gr.Row():
                     extract_password = gr.Textbox(label="Password", placeholder="Enter the password used for encryption", type="password", container=False, scale=10)
                     toggle_extract_vis = gr.Button("👁️", min_width=10, scale=1)
@@ -236,7 +244,7 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
                 extract_output_text = gr.Textbox(label="Extracted Message")
         extract_button.click(
             fn=extract_message,
-            inputs=[extract_input_audio, extract_password],
+            inputs=[extract_input_file, extract_password],
             outputs=extract_output_text
         )
         toggle_extract_vis.click(

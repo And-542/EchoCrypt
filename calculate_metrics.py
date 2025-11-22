@@ -19,7 +19,7 @@ NUM_TEST_MESSAGES = 10000  # Number of random messages to test
 LATENT_DIM = 256
 
 # --- FEC Configuration (must match app.py) ---
-FEC_SYMBOLS = 16
+FEC_SYMBOLS = 24
 MAX_CHUNK_SIZE = (LATENT_DIM - 8) // 8
 MAX_PAYLOAD_BYTES_PER_CHUNK = MAX_CHUNK_SIZE - FEC_SYMBOLS
 MAX_MESSAGE_LENGTH = MAX_PAYLOAD_BYTES_PER_CHUNK * 4 # Test with messages up to 4 chunks long
@@ -57,11 +57,19 @@ def main():
 
     # --- Initialize Metrics ---
     total_message_errors = 0
+    total_message_errors_pre_fec = 0
     total_bit_errors = 0
     total_bits_tested = 0
     total_snr = 0.0
     total_chunks_processed = 0
     rs = RSCodec(FEC_SYMBOLS)
+
+    # --- Pre-generate a single "clean" audio for consistent SNR calculation ---
+    with torch.no_grad():
+        # Use a fixed random vector for reproducibility
+        torch.manual_seed(42)
+        clean_noise_vec = torch.randn(1, LATENT_DIM, device=DEVICE)
+        clean_audio_baseline = generator(clean_noise_vec)
 
     # --- Evaluation Loop ---
     print("\n🚀 Starting evaluation...")
@@ -80,7 +88,9 @@ def main():
         payload_chunks = [payload_to_hide[i:i + MAX_PAYLOAD_BYTES_PER_CHUNK] for i in range(0, len(payload_to_hide), MAX_PAYLOAD_BYTES_PER_CHUNK)]
 
         reconstructed_payload = b""
+        reconstructed_payload_pre_fec = b""
         is_corrupted = False
+        is_corrupted_pre_fec = False
 
         # 2. Process each chunk through the full autoencoder and FEC pipeline
         for chunk in payload_chunks:
@@ -115,12 +125,21 @@ def main():
                     clean_audio = generator(noise_vec)
                     signal_power = torch.mean(clean_audio.pow(2))
                     noise_power = torch.mean((generated_audio - clean_audio).pow(2))
+                with torch.no_grad(): # Compare against the pre-generated baseline
+                    signal_power = torch.mean(clean_audio_baseline.pow(2))
+                    noise_power = torch.mean((generated_audio - clean_audio_baseline).pow(2))
                     snr = 10 * torch.log10(signal_power / noise_power) if noise_power > 0 else float('inf')
                     total_snr += snr.item()
                     total_chunks_processed += 1
 
                 # Convert back to data
                 extracted_fec_chunk = binary_vector_to_data(extracted_vector.cpu())
+
+                # --- Check for message errors WITHOUT FEC ---
+                # Take the part of the extracted data that corresponds to the original payload
+                extracted_payload_chunk = extracted_fec_chunk[:len(chunk)]
+                if extracted_payload_chunk != chunk:
+                    is_corrupted_pre_fec = True # Mark message as corrupted if any chunk is wrong
 
                 try:
                     # The library expects a mutable bytearray. This is a critical detail.
@@ -138,20 +157,26 @@ def main():
         # 3. Check if the final message is correct
         if is_corrupted or reconstructed_payload != original_message_bytes:
             total_message_errors += 1
+        
+        # Check for pre-FEC errors (no need to check byte-for-byte again, the flag is enough)
+        if is_corrupted_pre_fec:
+            total_message_errors_pre_fec += 1
 
     print("✅ Evaluation complete.")
 
     # --- Final Results ---
     mer = (total_message_errors / NUM_TEST_MESSAGES) if NUM_TEST_MESSAGES > 0 else 0
+    mer_pre_fec = (total_message_errors_pre_fec / NUM_TEST_MESSAGES) if NUM_TEST_MESSAGES > 0 else 0
     ber = (total_bit_errors / total_bits_tested) if total_bits_tested > 0 else 0
     avg_snr = (total_snr / total_chunks_processed) if total_chunks_processed > 0 else 0
 
-    print("\n--- Final Metrics (with FEC) ---")
+    print("\n--- Final Metrics ---")
     print(f"Total Messages Tested: {NUM_TEST_MESSAGES}")
     print("-----------------------")
     print(f"📈 Average Signal-to-Noise Ratio (SNR): {avg_snr:.2f} dB")
     print(f"📉 Bit Error Rate (BER) [pre-FEC]:    {ber:.6f} ({total_bit_errors}/{total_bits_tested} bit errors)")
-    print(f"📊 Final Message Error Rate (MER):  {mer:.6f} ({total_message_errors} errors)")
+    print(f"📊 Message Error Rate (MER) [pre-FEC]:  {mer_pre_fec:.6f} ({total_message_errors_pre_fec} errors)")
+    print(f"✅ Final Message Error Rate (MER) [post-FEC]: {mer:.6f} ({total_message_errors} errors)")
     print("-----------------------")
     print("SNR: Higher is better (less audible distortion).")
     print("BER: The raw error rate of the neural network before correction.")
@@ -162,8 +187,9 @@ def main():
         "Total Messages Tested": NUM_TEST_MESSAGES,
         "Average SNR (dB)": f"{avg_snr:.2f}",
         "Bit Error Rate (BER)": f"{ber:.6f}",
-        "Message Errors": total_message_errors,
-        "Final Message Error Rate (MER)": f"{mer:.6f}",
+        "Message Error Rate (pre-FEC)": f"{mer_pre_fec:.6f}",
+        "Message Errors (post-FEC)": total_message_errors,
+        "Final Message Error Rate (post-FEC)": f"{mer:.6f}",
     }
 
 
