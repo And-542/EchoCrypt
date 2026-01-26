@@ -3,6 +3,9 @@
 Final Model Performance (End-to-End with FEC):
 -------------------------------------------------
 Total Messages Tested: 10000
-Message Errors: 10000
-Final Message Error Rate (MER): 1.000000
+Average SNR: 14.53 dB
+Bit Error Rate (BER) [pre-FEC]: 0.006212
+Message Error Rate (MER) [pre-FEC]: 0.677000
+Message Errors [post-FEC]: 45
+Final Message Error Rate (MER) [post-FEC]: 0.004500
 -------------------------------------------------

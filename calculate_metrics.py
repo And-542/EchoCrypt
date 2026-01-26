@@ -5,6 +5,7 @@ import sys
 import os
 import random
 import string
+import matplotlib.pyplot as plt
 
 # Add the project root to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -62,6 +63,9 @@ def main():
     total_bits_tested = 0
     total_snr = 0.0
     total_chunks_processed = 0
+    all_snr_values = []
+    all_ber_values = []
+    all_fec_corrections = []
     rs = RSCodec(FEC_SYMBOLS)
 
     # --- Pre-generate a single "clean" audio for consistent SNR calculation ---
@@ -97,6 +101,7 @@ def main():
             try:
                 # Add FEC
                 fec_chunk = rs.encode(chunk)
+                expected_fec_len = len(fec_chunk)
 
                 # Convert to vector
                 original_vector = data_to_binary_vector(fec_chunk, LATENT_DIM).to(DEVICE)
@@ -117,6 +122,7 @@ def main():
                     bit_errors_in_chunk = np.sum(original_vec_cpu[data_indices] != binarized_extracted[data_indices])
                     total_bit_errors += bit_errors_in_chunk
                     total_bits_tested += len(data_indices)
+                    all_ber_values.append(bit_errors_in_chunk / len(data_indices))
 
                 # --- Calculate SNR ---
                 with torch.no_grad():
@@ -130,10 +136,14 @@ def main():
                     noise_power = torch.mean((generated_audio - clean_audio_baseline).pow(2))
                     snr = 10 * torch.log10(signal_power / noise_power) if noise_power > 0 else float('inf')
                     total_snr += snr.item()
+                    if snr.item() != float('inf'): all_snr_values.append(snr.item())
                     total_chunks_processed += 1
 
                 # Convert back to data
                 extracted_fec_chunk = binary_vector_to_data(extracted_vector.cpu())
+                
+                # Trim any padding bytes added during vector conversion so RS decoder doesn't fail
+                extracted_fec_chunk = extracted_fec_chunk[:expected_fec_len]
 
                 # --- Check for message errors WITHOUT FEC ---
                 # Take the part of the extracted data that corresponds to the original payload
@@ -144,7 +154,8 @@ def main():
                 try:
                     # The library expects a mutable bytearray. This is a critical detail.
                     data_byte_array = bytearray(extracted_fec_chunk)
-                    corrected_chunk, _, _ = rs.decode(data_byte_array)
+                    corrected_chunk, _, errata_pos = rs.decode(data_byte_array)
+                    all_fec_corrections.append(len(errata_pos))
                     reconstructed_payload += corrected_chunk
                 except Exception: # Catches Reed-Solomon errors if chunk is too corrupted
                     is_corrupted = True
@@ -181,6 +192,51 @@ def main():
     print("SNR: Higher is better (less audible distortion).")
     print("BER: The raw error rate of the neural network before correction.")
     print("MER: The final, end-to-end reliability of the system after error correction.")
+
+    # --- Visualization ---
+    print("\n📊 Generating visualization graph...")
+    plt.figure(figsize=(14, 10))
+    
+    plt.subplot(2, 2, 1)
+    plt.hist(all_snr_values, bins=50, color='skyblue', edgecolor='black')
+    plt.title('SNR Distribution (dB)')
+    plt.xlabel('SNR (dB)')
+    plt.ylabel('Count')
+    
+    plt.subplot(2, 2, 2)
+    plt.hist(all_ber_values, bins=50, color='salmon', edgecolor='black')
+    plt.title('BER Distribution (Pre-FEC)')
+    plt.xlabel('Bit Error Rate')
+    plt.ylabel('Count')
+
+    plt.subplot(2, 2, 3)
+    plt.hist(all_fec_corrections, bins=range(0, (FEC_SYMBOLS // 2) + 2), color='lightgreen', edgecolor='black', align='left')
+    plt.title('FEC Corrections (Post-FEC Activity)')
+    plt.xlabel('Symbols Corrected per Chunk')
+    plt.ylabel('Count')
+    plt.xticks(range(0, (FEC_SYMBOLS // 2) + 1))
+
+    plt.subplot(2, 2, 4)
+    plt.axis('off')
+    table_data = [
+        ["Metric", "Value"],
+        ["Total Messages", f"{NUM_TEST_MESSAGES}"],
+        ["Avg SNR (dB)", f"{avg_snr:.2f}"],
+        ["BER (Pre-FEC)", f"{ber:.6f}"],
+        ["MER (Pre-FEC)", f"{mer_pre_fec:.6f}"],
+        ["MER (Post-FEC)", f"{mer:.6f}"],
+        ["Total Errors", f"{total_message_errors}"]
+    ]
+    table = plt.table(cellText=table_data, loc='center', cellLoc='center', colWidths=[0.5, 0.5])
+    table.auto_set_font_size(False)
+    table.set_fontsize(12)
+    table.scale(1, 2)
+    plt.title('Summary Metrics Table')
+    
+    plt.tight_layout()
+    plot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "metrics_visualization.png")
+    plt.savefig(plot_path, dpi=300)
+    print(f"✅ Graph saved to: {plot_path}")
 
     # Return the metrics as a dictionary so other scripts can use them
     return {
