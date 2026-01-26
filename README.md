@@ -29,8 +29,7 @@ EchoCrypt/
 │
 ├── scripts/
 │   ├── generate_noise.py   # Script to generate random noise for testing
-│   ├── embed_data.py       # Script to embed a secret message into a new audio file
-│   └── extract_data.py     # Script to verify if a message is in an audio file
+│
 │
 ├── research/
 │   ├── stego_paper.pdf     # Reference research papers
@@ -39,6 +38,7 @@ EchoCrypt/
 ├── README.md
 ├── .gitignore
 ├── requirements.txt
+├── calculate_metrics.py    # Script to calculate BER, MER, and SNR
 └── main.py                 # Optional central execution point
 🧠 Technologies & Methods
 Coverless Audio Steganography
