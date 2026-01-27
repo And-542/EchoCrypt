@@ -5,6 +5,7 @@ import librosa # Use librosa for more robust audio loading
 import os
 import sys
 from scipy.io.wavfile import write as write_wav
+import tempfile
 
 # --- Novelty: Add Encryption ---
 from Crypto.Cipher import AES
@@ -44,6 +45,29 @@ extractor.to(DEVICE)
 extractor.eval()
 
 print("✅ Models loaded successfully.")
+
+# --- Warmup Models ---
+# This prevents the first user request from being slow due to CUDA initialization
+print("🔥 Warming up models and audio processing...")
+with torch.no_grad():
+    dummy_latent = torch.randn(1, LATENT_DIM).to(DEVICE)
+    dummy_audio = generator(dummy_latent)
+    extractor(dummy_audio)
+    
+    # Warmup Librosa (triggers Numba JIT compilation and backend initialization)
+    dummy_audio_np = dummy_audio.squeeze().cpu().numpy()
+    # Create a temp file to force librosa to go through file loading logic
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        write_wav(tmp.name, SAMPLE_RATE, dummy_audio_np)
+        tmp_path = tmp.name
+    
+    try:
+        librosa.load(tmp_path, sr=SAMPLE_RATE)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+            
+print("✅ Warmup complete.")
 
 # --- Helper Functions (adapted from scripts) ---
 
@@ -105,7 +129,7 @@ def embed_message(message: str, password: str):
     final_audio = np.concatenate(all_audio_chunks)
     
     # Gradio handles temporary file creation for outputs
-    output_path = "embedded_message.wav"
+    output_path = os.path.abspath("embedded_message.wav")
     write_wav(output_path, SAMPLE_RATE, final_audio.astype(np.float32))
     
     # We need to return a value for each output component defined in the .click() event.
@@ -139,17 +163,28 @@ def extract_message(audio_filepath, password: str):
     if num_chunks == 0:
         return "[Error] Audio file is too short to contain a message."
 
+    # --- Optimization: Batch Processing ---
+    # Instead of looping and running the model N times, we run it once with batch size N.
+    
+    # 1. Truncate audio to exact multiple of chunk size
+    valid_length = num_chunks * AUDIO_LENGTH_SAMPLES
+    received_audio = received_audio[:valid_length]
+
+    # 2. Reshape to (Batch_Size, 1, Samples)
+    # Use torch.tensor to copy data, ensuring contiguity and avoiding stride issues with numpy slices
+    input_tensor = torch.tensor(received_audio, dtype=torch.float32, device=DEVICE).view(num_chunks, 1, AUDIO_LENGTH_SAMPLES)
+
+    # 3. Run inference on the whole batch
+    with torch.no_grad():
+        extracted_vectors = extractor(input_tensor) # Output shape: (num_chunks, latent_dim)
+    
+    # 4. Move results to CPU for decoding
+    extracted_vectors_cpu = extracted_vectors.cpu()
+
     full_payload = b""
     for i in range(num_chunks):
-        chunk_audio = received_audio[i * AUDIO_LENGTH_SAMPLES : (i + 1) * AUDIO_LENGTH_SAMPLES]
-        received_audio_tensor = torch.from_numpy(chunk_audio).to(DEVICE).unsqueeze(0).unsqueeze(1) # Shape: (1, 1, 16000)
-
-        with torch.no_grad():
-            extracted_vector = extractor(received_audio_tensor) # Expects (batch, samples)
-        
-        # Convert vector back to data bytes
-        # This chunk includes the FEC data
-        fec_chunk = binary_vector_to_data(extracted_vector.cpu())
+        # Process the vector from the batch
+        fec_chunk = binary_vector_to_data(extracted_vectors_cpu[i])
         
         # --- Error Correction ---
         try:
@@ -193,64 +228,161 @@ def toggle_password_visibility(is_visible):
 
 # --- Build and Launch the Gradio App ---
 
+# Custom Theme and CSS for a modern look
+
+custom_css = """
+body, .gradio-container {
+    background-color: #05050a !important;
+    color: #e9d5ff !important;
+}
+h1 {
+    text-align: center;
+    font-weight: 900 !important;
+    background: -webkit-linear-gradient(45deg, #a855f7, #d946ef);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-top: 1rem !important;
+    margin-bottom: 0.5rem !important;
+    filter: drop-shadow(0 0 10px rgba(168, 85, 247, 0.5));
+}
+.subtitle {
+    text-align: center;
+    font-size: 1.2rem;
+    color: #d8b4fe;
+    margin-bottom: 2rem;
+    font-weight: 500;
+    text-shadow: 0 0 5px rgba(216, 180, 254, 0.4);
+}
+.tabs {
+    margin-top: 1rem;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 0 25px rgba(139, 92, 246, 0.2);
+    border: 1px solid #581c87;
+    background-color: #110a1f !important;
+}
+footer {
+    text-align: center;
+    margin-top: 3rem;
+    color: #a855f7;
+    font-size: 0.8rem;
+    opacity: 0.8;
+}
+/* Neon overrides */
+button.primary {
+    background: linear-gradient(90deg, #7e22ce, #c026d3) !important;
+    box-shadow: 0 0 15px rgba(192, 38, 211, 0.5) !important;
+    border: none !important;
+    color: white !important;
+}
+label, span {
+    color: #e9d5ff !important;
+}
+/* Input styling */
+input, textarea {
+    background-color: #130e26 !important;
+    border: 1px solid #6b21a8 !important;
+    color: #e9d5ff !important;
+}
+input:focus, textarea:focus {
+    border-color: #d946ef !important;
+    box-shadow: 0 0 10px rgba(217, 70, 239, 0.3) !important;
+}
+"""
+
 with gr.Blocks() as demo:
-    gr.Markdown(
-        """
-        # 🎧 EchoCrypt: Audio Steganography 
-        Use the tools below to hide a message in a generated audio file or extract a message from an existing one.
-        """
-    )
+    gr.HTML("<style>" + custom_css + "</style>")
+    with gr.Column():
+        gr.Markdown(
+            """
+            # 🎧 EchoCrypt
+            <div class="subtitle">Coverless White Noise Audio Steganography</div>
+            """
+        )
 
-    with gr.Tab("Embed Message"):
-        with gr.Row():
-            with gr.Column():
-                embed_input = gr.Textbox(label="Secret Message", placeholder="Enter your secret message here...")
+        with gr.Tabs(elem_classes="tabs"):
+            with gr.Tab("🔒 Embed Message"):
                 with gr.Row():
-                    embed_password = gr.Textbox(label="Password", placeholder="Enter a password for encryption", type="password", container=False, scale=10)
-                    toggle_embed_vis = gr.Button("👁️", min_width=10, scale=1)
-                embed_password_visible = gr.State(False)
+                    with gr.Column(scale=1):
+                        embed_input = gr.Textbox(
+                            label="Secret Message", 
+                            placeholder="Type your confidential message here...", 
+                            lines=4
+                        )
+                        with gr.Row():
+                            embed_password = gr.Textbox(
+                                label="Encryption Password", 
+                                placeholder="Enter a strong password", 
+                                type="password", 
+                                scale=10
+                            )
+                            toggle_embed_vis = gr.Button("👁️", scale=1, min_width=10)
+                        embed_password_visible = gr.State(False)
 
-                embed_button = gr.Button("Generate Audio", variant="primary")
-            with gr.Column():
-                embed_output_audio = gr.Audio(label="Generated Audio with Hidden Message", type="filepath")
-                download_file = gr.File(label="Download Audio File", visible=False)
-        embed_button.click(
-            fn=embed_message,
-            inputs=[embed_input, embed_password],
-            # The function returns the same path to both the audio player and the file download component
-            outputs=[embed_output_audio, download_file]
-        )
-        toggle_embed_vis.click(
-            fn=toggle_password_visibility,
-            inputs=[embed_password_visible],
-            outputs=[embed_password_visible, embed_password, toggle_embed_vis]
-        )
+                        embed_button = gr.Button("Generate Secure Audio 🎵", variant="primary", size="lg")
+                    
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 📤 Output")
+                        embed_output_audio = gr.Audio(label="Stego-Audio", type="filepath", interactive=False)
+                        download_file = gr.File(label="Download WAV", visible=False, interactive=False)
 
-    with gr.Tab("Extract Message"):
-        with gr.Row():
-            with gr.Column():
-                # Use gr.File instead of gr.Audio to allow any file type, bypassing MIME type checks
-                extract_input_file = gr.File(
-                    label="Upload Audio/Video File (.wav, .mp3, .mp4, etc.)",
-                    type="filepath",
+                embed_button.click(
+                    fn=embed_message,
+                    inputs=[embed_input, embed_password],
+                    outputs=[embed_output_audio, download_file]
                 )
-                with gr.Row():
-                    extract_password = gr.Textbox(label="Password", placeholder="Enter the password used for encryption", type="password", container=False, scale=10)
-                    toggle_extract_vis = gr.Button("👁️", min_width=10, scale=1)
-                extract_password_visible = gr.State(False)
+                toggle_embed_vis.click(
+                    fn=toggle_password_visibility,
+                    inputs=[embed_password_visible],
+                    outputs=[embed_password_visible, embed_password, toggle_embed_vis]
+                )
 
-                extract_button = gr.Button("Extract Message", variant="primary")
-            with gr.Column():
-                extract_output_text = gr.Textbox(label="Extracted Message")
-        extract_button.click(
-            fn=extract_message,
-            inputs=[extract_input_file, extract_password],
-            outputs=extract_output_text
-        )
-        toggle_extract_vis.click(
-            fn=toggle_password_visibility,
-            inputs=[extract_password_visible],
-            outputs=[extract_password_visible, extract_password, toggle_extract_vis]
+            with gr.Tab("🔓 Extract Message"):
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        extract_input_file = gr.File(
+                            label="Upload Audio File",
+                            file_types=[".wav", ".mp3", ".mp4", ".flac"],
+                            type="filepath",
+                            height=200
+                        )
+                        with gr.Row():
+                            extract_password = gr.Textbox(
+                                label="Decryption Password", 
+                                placeholder="Enter the password used for encryption", 
+                                type="password", 
+                                scale=10
+                            )
+                            toggle_extract_vis = gr.Button("👁️", scale=1, min_width=10)
+                        extract_password_visible = gr.State(False)
+
+                        extract_button = gr.Button("Decrypt & Extract 🔓", variant="primary", size="lg")
+                    
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 📩 Decoded Message")
+                        extract_output_text = gr.Textbox(
+                            label="Result", 
+                            placeholder="The extracted message will appear here...", 
+                            lines=6
+                        )
+
+                extract_button.click(
+                    fn=extract_message,
+                    inputs=[extract_input_file, extract_password],
+                    outputs=extract_output_text
+                )
+                toggle_extract_vis.click(
+                    fn=toggle_password_visibility,
+                    inputs=[extract_password_visible],
+                    outputs=[extract_password_visible, extract_password, toggle_extract_vis]
+                )
+
+        gr.Markdown(
+            """
+            <footer>
+            EchoCrypt Project • Powered by PyTorch, Gradio & AES-256 Encryption
+            </footer>
+            """
         )
 
 if __name__ == "__main__":
