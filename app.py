@@ -7,7 +7,7 @@ import sys
 from scipy.io.wavfile import write as write_wav
 import tempfile
 
-# --- Novelty: Add Encryption ---
+# Encryption Modules---
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 from Crypto.Protocol.KDF import scrypt
