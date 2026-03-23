@@ -276,13 +276,7 @@ def extract_message(audio_filepath, password: str):
                 display_text += f"[⚠️ Save cancelled by user]\n--- File Contents ---\n{file_content}"
             return display_text
         else:
-            save_path = ask_save_path("recover_message.txt")
-            if save_path:
-                with open(save_path, "w", encoding="utf-8") as f:
-                    f.write(decoded_text)
-                return f"[📁 Text saved to: {save_path}]\n\n{decoded_text}"
-            else:
-                return f"[⚠️ Save cancelled by user]\n\n{decoded_text}"
+            return decoded_text
     except (ValueError, KeyError):
         return "[Decryption Failed] Incorrect password or corrupted data."
 
