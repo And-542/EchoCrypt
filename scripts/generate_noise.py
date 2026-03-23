@@ -3,7 +3,6 @@ import os
 import torch
 import soundfile as sf
 
-# Add the project root to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.generator import Generator
@@ -21,11 +20,11 @@ def generate_and_save_audio(model, latent_dim, output_path, sample_rate=16000):
     # Determine device and move model and tensor
     device = next(model.parameters()).device
 
-    # Ensure the model is in evaluation mode
+    
     model.eval()
 
     # Generate a random latent vector (this will eventually be our encoded message)
-    # No gradients needed for inference
+    
     with torch.no_grad():
         z = torch.randn(1, latent_dim).to(device)  # Batch size of 1, on the correct device
         generated_waveform = model(z)

@@ -216,19 +216,19 @@ def extract_message(audio_filepath, password: str):
 def toggle_password_visibility(is_visible):
     """Toggles the visibility of a password field."""
     if is_visible:
-        # If currently visible, hide it
+       
         new_type = "password"
-        new_icon = "👁️" # Eye icon for "show"
+        new_icon = "👁️" 
     else:
-        # If currently hidden, show it
+        
         new_type = "text"
-        new_icon = "🙈" # Monkey icon for "hide"
+        new_icon = "🙈" 
     
     return not is_visible, gr.update(type=new_type), gr.update(value=new_icon)
 
 # --- Build and Launch the Gradio App ---
 
-# Custom Theme and CSS for a modern look
+
 
 custom_css = """
 body, .gradio-container {
