@@ -77,12 +77,28 @@ def get_key_from_password(password: str, salt: bytes) -> bytes:
 
 # --- Gradio Interface Functions ---
 
-def embed_message(message: str, password: str):
-    """Gradio function to embed a message and return the audio file path for multiple components."""
-    if not message:
-        raise gr.Error("Message cannot be empty.")
+def embed_message(text_message: str, file_path, password: str):
+    """Gradio function to embed a message from text and/or a file and return the audio file path for multiple components."""
+    if not text_message and not file_path:
+        raise gr.Error("Please enter a message or upload a text file.")
     if not password:
         raise gr.Error("Password cannot be empty.")
+        
+    final_message = text_message if text_message else ""
+    
+    if file_path:
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                file_message = f.read()
+                if final_message:
+                    final_message += "\n" + file_message
+                else:
+                    final_message = file_message
+        except Exception as e:
+            raise gr.Error(f"Failed to read the file: {e}")
+
+    if not final_message.strip():
+        raise gr.Error("The provided message is empty.")
 
     # --- Encryption ---
     salt = os.urandom(16) # Generate a new random salt for each message
@@ -90,7 +106,7 @@ def embed_message(message: str, password: str):
     cipher = AES.new(key, AES.MODE_CBC) # IV is generated automatically
     
     # Encrypt the message (must be bytes)
-    message_bytes = message.encode('utf-8')
+    message_bytes = final_message.encode('utf-8')
     ciphertext = cipher.encrypt(pad(message_bytes, AES.block_size))
     
     # The payload is salt + iv + ciphertext. This is what we hide.
@@ -149,11 +165,11 @@ def extract_message(audio_filepath, password: str):
     try:
         received_audio, sr = librosa.load(audio_filepath, sr=SAMPLE_RATE, mono=True)
     except Exception as e:
-        return f"[Error] Failed to load or process audio file. It might be an unsupported format or corrupted. Details: {e}"
+        return f"[Error] Failed to load or process audio file. It might be an unsupported format or corrupted. Details: {e}", gr.update(visible=False)
 
     if sr != SAMPLE_RATE:
         # This check is redundant if librosa resampling works, but good for safety.
-        return f"[Error] Audio sample rate ({sr}Hz) does not match model's required rate ({SAMPLE_RATE}Hz)."
+        return f"[Error] Audio sample rate ({sr}Hz) does not match model's required rate ({SAMPLE_RATE}Hz).", gr.update(visible=False)
 
     if received_audio.dtype != np.float32:
         # Normalize to float32 if it's an integer type
@@ -161,7 +177,7 @@ def extract_message(audio_filepath, password: str):
 
     num_chunks = len(received_audio) // AUDIO_LENGTH_SAMPLES
     if num_chunks == 0:
-        return "[Error] Audio file is too short to contain a message."
+        return "[Error] Audio file is too short to contain a message.", gr.update(visible=False)
 
     # --- Optimization: Batch Processing ---
     # Instead of looping and running the model N times, we run it once with batch size N.
@@ -195,10 +211,10 @@ def extract_message(audio_filepath, password: str):
             full_payload += corrected_chunk
 
         except Exception: # Catches Reed-Solomon errors if chunk is too corrupted
-            return "[Extraction Failed] Data is too corrupted to be recovered, even with FEC."
+            return "[Extraction Failed] Data is too corrupted to be recovered, even with FEC.", gr.update(visible=False)
 
     if not full_payload:
-        return "[No data found in audio]"
+        return "[No data found in audio]", gr.update(visible=False)
 
     # --- Decryption ---
     try:
@@ -209,9 +225,15 @@ def extract_message(audio_filepath, password: str):
         key = get_key_from_password(password, salt)
         cipher = AES.new(key, AES.MODE_CBC, iv=iv)
         decrypted_message_bytes = unpad(cipher.decrypt(ciphertext), AES.block_size)
-        return decrypted_message_bytes.decode('utf-8')
+        
+        decoded_text = decrypted_message_bytes.decode('utf-8')
+        recovered_path = os.path.abspath("recovered_message.txt")
+        with open(recovered_path, "w", encoding="utf-8") as f:
+            f.write(decoded_text)
+            
+        return decoded_text, gr.update(value=recovered_path, visible=True)
     except (ValueError, KeyError):
-        return "[Decryption Failed] Incorrect password or corrupted data."
+        return "[Decryption Failed] Incorrect password or corrupted data.", gr.update(visible=False)
 
 def toggle_password_visibility(is_visible):
     """Toggles the visibility of a password field."""
@@ -304,10 +326,15 @@ with gr.Blocks() as demo:
             with gr.Tab("🔒 Embed Message"):
                 with gr.Row():
                     with gr.Column(scale=1):
-                        embed_input = gr.Textbox(
-                            label="Secret Message", 
-                            placeholder="Type your confidential message here...", 
+                        embed_text_input = gr.Textbox(
+                            label="Secret Message",
+                            placeholder="Type your confidential message here...",
                             lines=4
+                        )
+                        embed_file_input = gr.File(
+                            label="Or Upload Secret Text File (.txt)", 
+                            file_types=[".txt"],
+                            type="filepath"
                         )
                         with gr.Row():
                             embed_password = gr.Textbox(
@@ -328,7 +355,7 @@ with gr.Blocks() as demo:
 
                 embed_button.click(
                     fn=embed_message,
-                    inputs=[embed_input, embed_password],
+                    inputs=[embed_text_input, embed_file_input, embed_password],
                     outputs=[embed_output_audio, download_file]
                 )
                 toggle_embed_vis.click(
@@ -365,11 +392,12 @@ with gr.Blocks() as demo:
                             placeholder="The extracted message will appear here...", 
                             lines=6
                         )
+                        download_extracted_file = gr.File(label="Download Recovered Text", visible=False, interactive=False)
 
                 extract_button.click(
                     fn=extract_message,
                     inputs=[extract_input_file, extract_password],
-                    outputs=extract_output_text
+                    outputs=[extract_output_text, download_extracted_file]
                 )
                 toggle_extract_vis.click(
                     fn=toggle_password_visibility,
