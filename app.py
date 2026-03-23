@@ -3,9 +3,11 @@ import torch
 import numpy as np
 import librosa # Use librosa for more robust audio loading
 import os
+import re
 import sys
 from scipy.io.wavfile import write as write_wav
 import tempfile
+import subprocess
 
 # Encryption Modules---
 from Crypto.Cipher import AES
@@ -75,6 +77,22 @@ def get_key_from_password(password: str, salt: bytes) -> bytes:
     """Derives a 32-byte AES key from a password using scrypt."""
     return scrypt(password, salt, key_len=32, N=2**14, r=8, p=1)
 
+def ask_save_path(initial_file: str) -> str:
+    """Opens a native OS save file dialog in a separate process to avoid Gradio thread conflicts."""
+    code = '''import tkinter as tk
+from tkinter import filedialog
+import sys
+root = tk.Tk()
+root.withdraw()
+root.attributes('-topmost', True)
+path = filedialog.asksaveasfilename(initialfile=sys.argv[1], title="Save Recovered File")
+print(path)'''
+    try:
+        result = subprocess.run([sys.executable, "-c", code, initial_file], capture_output=True, text=True)
+        return result.stdout.strip()
+    except Exception:
+        return ""
+
 # --- Gradio Interface Functions ---
 
 def embed_message(text_message: str, file_path, password: str):
@@ -88,12 +106,13 @@ def embed_message(text_message: str, file_path, password: str):
     
     if file_path:
         try:
+            file_name = os.path.basename(file_path)
             with open(file_path, 'r', encoding='utf-8') as f:
                 file_message = f.read()
                 if final_message:
-                    final_message += "\n" + file_message
+                    final_message += f"\n---[FILE_START:{file_name}]---\n{file_message}"
                 else:
-                    final_message = file_message
+                    final_message = f"---[FILE_START:{file_name}]---\n{file_message}"
         except Exception as e:
             raise gr.Error(f"Failed to read the file: {e}")
 
@@ -151,7 +170,7 @@ def embed_message(text_message: str, file_path, password: str):
     # We need to return a value for each output component defined in the .click() event.
     # The first path goes to the gr.Audio component.
     # The second path goes to the gr.File component, which we also make visible.
-    return output_path, gr.update(value=output_path, visible=True)
+    return output_path, gr.DownloadButton(value=output_path, visible=True)
 
 def extract_message(audio_filepath, password: str):
     """Gradio function to extract a message from an uploaded audio file."""
@@ -165,11 +184,11 @@ def extract_message(audio_filepath, password: str):
     try:
         received_audio, sr = librosa.load(audio_filepath, sr=SAMPLE_RATE, mono=True)
     except Exception as e:
-        return f"[Error] Failed to load or process audio file. It might be an unsupported format or corrupted. Details: {e}", gr.update(visible=False)
+        return f"[Error] Failed to load or process audio file. It might be an unsupported format or corrupted. Details: {e}"
 
     if sr != SAMPLE_RATE:
         # This check is redundant if librosa resampling works, but good for safety.
-        return f"[Error] Audio sample rate ({sr}Hz) does not match model's required rate ({SAMPLE_RATE}Hz).", gr.update(visible=False)
+        return f"[Error] Audio sample rate ({sr}Hz) does not match model's required rate ({SAMPLE_RATE}Hz)."
 
     if received_audio.dtype != np.float32:
         # Normalize to float32 if it's an integer type
@@ -177,7 +196,7 @@ def extract_message(audio_filepath, password: str):
 
     num_chunks = len(received_audio) // AUDIO_LENGTH_SAMPLES
     if num_chunks == 0:
-        return "[Error] Audio file is too short to contain a message.", gr.update(visible=False)
+        return "[Error] Audio file is too short to contain a message."
 
     # --- Optimization: Batch Processing ---
     # Instead of looping and running the model N times, we run it once with batch size N.
@@ -211,10 +230,10 @@ def extract_message(audio_filepath, password: str):
             full_payload += corrected_chunk
 
         except Exception: # Catches Reed-Solomon errors if chunk is too corrupted
-            return "[Extraction Failed] Data is too corrupted to be recovered, even with FEC.", gr.update(visible=False)
+            return "[Extraction Failed] Data is too corrupted to be recovered, even with FEC."
 
     if not full_payload:
-        return "[No data found in audio]", gr.update(visible=False)
+        return "[No data found in audio]"
 
     # --- Decryption ---
     try:
@@ -227,13 +246,45 @@ def extract_message(audio_filepath, password: str):
         decrypted_message_bytes = unpad(cipher.decrypt(ciphertext), AES.block_size)
         
         decoded_text = decrypted_message_bytes.decode('utf-8')
-        recovered_path = os.path.abspath("recovered_message.txt")
-        with open(recovered_path, "w", encoding="utf-8") as f:
-            f.write(decoded_text)
+        
+        # Check if we embedded a specific file using our marker
+        match = re.search(r'---\[FILE_START:(.*?)\]---\r?\n(.*)', decoded_text, flags=re.DOTALL)
+        
+        if match:
+            original_filename = match.group(1)
+            file_content = match.group(2)
             
-        return decoded_text, gr.update(value=recovered_path, visible=True)
+            # Sanitize the filename to prevent operating system path errors
+            safe_filename = "".join(c for c in original_filename if c.isalnum() or c in " ._-").strip()
+            if not safe_filename: safe_filename = "file.txt"
+            safe_filename = f"recover_{safe_filename}"
+            
+            # Display text (everything before the file marker, if any)
+            text_part = decoded_text[:match.start()].strip()
+            
+            display_text = ""
+            if text_part:
+                display_text += f"{text_part}\n\n"
+
+            save_path = ask_save_path(safe_filename)
+            
+            if save_path:
+                with open(save_path, "w", encoding="utf-8") as f:
+                    f.write(file_content)
+                display_text += f"[📁 File saved to: {save_path}]\n--- File Contents ---\n{file_content}"
+            else:
+                display_text += f"[⚠️ Save cancelled by user]\n--- File Contents ---\n{file_content}"
+            return display_text
+        else:
+            save_path = ask_save_path("recover_message.txt")
+            if save_path:
+                with open(save_path, "w", encoding="utf-8") as f:
+                    f.write(decoded_text)
+                return f"[📁 Text saved to: {save_path}]\n\n{decoded_text}"
+            else:
+                return f"[⚠️ Save cancelled by user]\n\n{decoded_text}"
     except (ValueError, KeyError):
-        return "[Decryption Failed] Incorrect password or corrupted data.", gr.update(visible=False)
+        return "[Decryption Failed] Incorrect password or corrupted data."
 
 def toggle_password_visibility(is_visible):
     """Toggles the visibility of a password field."""
@@ -351,7 +402,7 @@ with gr.Blocks() as demo:
                     with gr.Column(scale=1):
                         gr.Markdown("### 📤 Output")
                         embed_output_audio = gr.Audio(label="Stego-Audio", type="filepath", interactive=False)
-                        download_file = gr.File(label="Download WAV", visible=False, interactive=False)
+                        download_file = gr.DownloadButton("⬇️ Download WAV", visible=False)
 
                 embed_button.click(
                     fn=embed_message,
@@ -392,12 +443,11 @@ with gr.Blocks() as demo:
                             placeholder="The extracted message will appear here...", 
                             lines=6
                         )
-                        download_extracted_file = gr.File(label="Download Recovered Text", visible=False, interactive=False)
 
                 extract_button.click(
                     fn=extract_message,
                     inputs=[extract_input_file, extract_password],
-                    outputs=[extract_output_text, download_extracted_file]
+                    outputs=[extract_output_text]
                 )
                 toggle_extract_vis.click(
                     fn=toggle_password_visibility,
@@ -413,6 +463,9 @@ with gr.Blocks() as demo:
             """
         )
 
+# Get the absolute path of the project directory to allow Gradio to serve files from it
+PROJECT_DIR = os.path.abspath(os.path.dirname(__file__))
+
 if __name__ == "__main__":
     # To make the UI accessible on your local network, set share=True
-    demo.launch()
+    demo.launch(allowed_paths=[PROJECT_DIR])
